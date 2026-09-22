@@ -1,4 +1,9 @@
-# Formula 110 Gradescope autograder
+# Formula 110 competition Gradescope autograder
+
+This directory contains the competition and leaderboard grader. The separate
+four-level individual exercise grader is documented in
+[`exercise/README.md`](exercise/README.md); both graders are intentionally kept
+in the repository.
 
 Build an upload-ready archive by naming the two required student modules:
 

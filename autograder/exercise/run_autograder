@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+mkdir -p /autograder/results
+chmod 0700 /autograder/results
+chmod -R a-w /autograder/submission 2>/dev/null || true
+
+echo "[Formula 110 Exercise] Starting autograder..."
+/autograder/venv/bin/python /opt/formula110-exercise-autograder/grade.py
+echo "[Formula 110 Exercise] Finished. Results: /autograder/results/results.json"
+exit 0

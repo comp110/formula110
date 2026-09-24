@@ -132,12 +132,26 @@ def test_parser_accepts_machine_readable_head_to_head_results() -> None:
     assert args.json is True
 
 
+@pytest.mark.parametrize(
+    ("name_arguments", "expected_names"),
+    [
+        ([], ("Level 3", "Level 3")),
+        (
+            ["--challenger-name", "submission 123", "--incumbent-name", "submission 456"],
+            ("submission 123", "submission 456"),
+        ),
+    ],
+)
 def test_headless_cli_prints_json_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    name_arguments: list[str],
+    expected_names: tuple[str, str],
 ) -> None:
     controller_path = tmp_path / "controller.py"
     controller_path.write_text(
-        "from racing import RobotCommand\ndef control(sensors):\n    return RobotCommand()\n",
+        "from racing import RobotCommand\nRACING_NAME = 'Level 3'\ndef control(sensors):\n    return RobotCommand()\n",
         encoding="utf-8",
     )
 
@@ -161,6 +175,7 @@ def test_headless_cli_prints_json_result(
             "--track-seed",
             "110",
             "--json",
+            *name_arguments,
         ]
     )
 
@@ -169,6 +184,8 @@ def test_headless_cli_prints_json_result(
     assert captured_arguments["random_seed"] == 271
     assert captured_arguments["track_id"] == "procedural"
     assert captured_arguments["track_seed"] == 110
+    assert captured_arguments["challenger_name"] == expected_names[0]
+    assert captured_arguments["incumbent_name"] == expected_names[1]
 
 
 def test_cli_passes_human_recording_path_to_playable_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -275,14 +292,28 @@ def test_playable_student_color_overrides_cli_team_color(tmp_path: Path, monkeyp
     assert captured_config.team_color == (1.0, 128 / 255, 0.0, 1.0)
 
 
-def test_watched_head_to_head_student_colors_override_team_colors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("name_arguments", "expected_names"),
+    [
+        ([], ("Orange Racer", "Green Racer")),
+        (
+            ["--challenger-name", "submission 123", "--incumbent-name", "submission 456"],
+            ("submission 123", "submission 456"),
+        ),
+    ],
+)
+def test_watched_head_to_head_uses_student_metadata_and_name_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name_arguments: list[str],
+    expected_names: tuple[str, str],
 ) -> None:
     challenger_path = tmp_path / "orange_challenger.py"
     challenger_path.write_text(
         "from racing import RobotCommand, RobotSensors\n"
         "\n"
         "RACING_COLOR = '#ff8000'\n"
+        "RACING_NAME = 'Orange Racer'\n"
         "\n"
         "def control(sensors: RobotSensors) -> RobotCommand:\n"
         "    return RobotCommand(throttle=0.4)\n",
@@ -293,6 +324,7 @@ def test_watched_head_to_head_student_colors_override_team_colors(
         "from racing import RobotCommand, RobotSensors\n"
         "\n"
         "RACING_COLOR = (0.0, 1.0, 0.0)\n"
+        "RACING_NAME = 'Green Racer'\n"
         "\n"
         "def control(sensors: RobotSensors) -> RobotCommand:\n"
         "    return RobotCommand(throttle=0.2)\n",
@@ -321,10 +353,41 @@ def test_watched_head_to_head_student_colors_override_team_colors(
             "#0000ff",
             "--incumbent-team-color",
             "#ff0000",
+            *name_arguments,
         ]
     )
 
     assert captured_config is not None
     assert captured_config.random_seed == 271
+    assert captured_config.challenger_name == expected_names[0]
+    assert captured_config.incumbent_name == expected_names[1]
     assert captured_config.challenger_team_color == (1.0, 128 / 255, 0.0, 1.0)
     assert captured_config.incumbent_team_color == (0.0, 1.0, 0.0, 1.0)
+
+
+def test_watched_head_to_head_names_can_override_keyboard_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_config: HeadToHeadViewerConfig | None = None
+
+    def fake_create_head_to_head_viewer_app(config: HeadToHeadViewerConfig) -> _FakeApp:
+        nonlocal captured_config
+        captured_config = config
+        return _FakeApp()
+
+    monkeypatch.setattr(cli, "create_head_to_head_viewer_app", fake_create_head_to_head_viewer_app)
+
+    cli.main(
+        [
+            "h2h",
+            "--watch",
+            "--challenger-keyboard",
+            "--incumbent-keyboard",
+            "--challenger-name",
+            "Player One",
+            "--incumbent-name",
+            "Player Two",
+        ]
+    )
+
+    assert captured_config is not None
+    assert captured_config.challenger_name == "Player One"
+    assert captured_config.incumbent_name == "Player Two"

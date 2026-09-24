@@ -229,6 +229,42 @@ split.
 
 ## Comparing controllers
 
+### Racing exported submissions by ID
+
+To race two submissions from `assignment_8706145_export/`, run:
+
+```bash
+uv run python scripts/run_submissions.py 429149360 429458989 --seed 110
+```
+
+The first ID is the challenger and the second is the incumbent. This opens a
+watched, 30-second race in three-quarter view with each controller's `RACING_NAME`
+as its car label. Controllers without a name use their submission ID as a fallback.
+Each submission's `formula110-submission.json` selects its controller; older
+`formula110-exercise-submission.json` exports use their level 3 controller.
+The script also accepts IDs written as `submission_429149360`.
+
+Use `--seed random` to choose a new seed; the script prints it so you can replay
+the matchup with `--seed INTEGER`. This seed changes the starting position and
+grid order. Use `--track-seed INTEGER` to generate a reproducible procedural
+track. Other `racing h2h` options pass through when placed after the two IDs:
+
+```bash
+uv run python scripts/run_submissions.py 429149360 429458989 \
+  --seed random --races 3 --round-seconds 60 --no-music
+
+uv run python scripts/run_submissions.py 429149360 429458989 \
+  --headless --seed 42 --races 7
+```
+
+Add `--fullscreen` to start the viewer in fullscreen. Use `--export-dir PATH`
+for another extracted assignment, `--camera follow` to change the view, or
+`--dry-run` to inspect the resolved command without running
+submission code. Controller files load through the existing h2h file-path
+loader, so the two submissions may have the same controller filename.
+
+### Racing local controllers
+
 Use a watched race when you need to understand behavior:
 
 ```bash
@@ -239,6 +275,8 @@ uv run racing h2h --watch \
   --races 1 \
   --round-seconds 30
 ```
+
+Add `--fullscreen` to `racing h2h --watch` to start the viewer in fullscreen.
 
 One side can use keyboard control in a watched race:
 

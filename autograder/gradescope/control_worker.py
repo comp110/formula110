@@ -67,6 +67,10 @@ def main() -> None:
         controller = load_student_controller(args.module_file, function_name=args.function)
     except BaseException as error:
         load_error = f"{type(error).__name__}: {error}"[:1000]
+    write_response(
+        response_stream,
+        {"ok": True} if load_error is None else {"ok": False, "error": load_error},
+    )
 
     while True:
         try:

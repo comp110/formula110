@@ -152,6 +152,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=None,
         help="Python student controller module for incumbent",
     )
+    h2h_parser.add_argument("--challenger-name", default=None, help="override the challenger display name")
+    h2h_parser.add_argument("--incumbent-name", default=None, help="override the incumbent display name")
+    h2h_parser.add_argument(
+        "--challenger-fallback-name", default=None, help="challenger label when its controller has no RACING_NAME"
+    )
+    h2h_parser.add_argument(
+        "--incumbent-fallback-name", default=None, help="incumbent label when its controller has no RACING_NAME"
+    )
     h2h_parser.add_argument(
         "--challenger-keyboard",
         action="store_true",
@@ -212,6 +220,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="print versioned machine-readable results instead of the terminal table (headless only)",
     )
     h2h_parser.add_argument("--window-type", choices=("offscreen",), default=None)
+    h2h_parser.add_argument("--fullscreen", action="store_true", help="start the watched race in fullscreen")
     h2h_parser.add_argument("--size", type=parse_window_size, default=(1280, 720))
     h2h_parser.add_argument(
         "--camera",
@@ -259,8 +268,14 @@ def _load_submission_from_args(
     raise AssertionError("parser.error should exit")
 
 
-def _student_submission_name(submission: StudentControllerSubmission, role: str) -> str:
-    return submission.display_name or role
+def _student_submission_name(
+    submission: StudentControllerSubmission | None,
+    role: str,
+    override: str | None = None,
+    *,
+    fallback: str | None = None,
+) -> str:
+    return override or (submission.display_name if submission is not None else None) or fallback or role
 
 
 def _student_submission_color(submission: StudentControllerSubmission | None, fallback: ColorRGBA) -> ColorRGBA:
@@ -356,18 +371,19 @@ def main(argv: Sequence[str] | None = None) -> None:
             create_head_to_head_viewer_app(
                 HeadToHeadViewerConfig(
                     size=cast(tuple[int, int], args.size),
+                    fullscreen=bool(args.fullscreen),
                     camera_view=CameraView(str(args.camera)),
-                    challenger_name="keyboard"
-                    if challenger_keyboard
-                    else _student_submission_name(
-                        cast(StudentControllerSubmission, challenger_submission),
-                        "challenger",
+                    challenger_name=_student_submission_name(
+                        challenger_submission,
+                        "keyboard" if challenger_keyboard else "challenger",
+                        args.challenger_name,
+                        fallback=args.challenger_fallback_name,
                     ),
-                    incumbent_name="keyboard"
-                    if incumbent_keyboard
-                    else _student_submission_name(
-                        cast(StudentControllerSubmission, incumbent_submission),
-                        "incumbent",
+                    incumbent_name=_student_submission_name(
+                        incumbent_submission,
+                        "keyboard" if incumbent_keyboard else "incumbent",
+                        args.incumbent_name,
+                        fallback=args.incumbent_fallback_name,
                     ),
                     challenger_controller=None if challenger_submission is None else challenger_submission.controller,
                     incumbent_controller=None if incumbent_submission is None else incumbent_submission.controller,
@@ -411,8 +427,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         result = run_headless_head_to_head(
             challenger_controller=challenger_submission.controller,
             incumbent_controller=incumbent_submission.controller,
-            challenger_name=_student_submission_name(challenger_submission, "challenger"),
-            incumbent_name=_student_submission_name(incumbent_submission, "incumbent"),
+            challenger_name=_student_submission_name(
+                challenger_submission, "challenger", args.challenger_name, fallback=args.challenger_fallback_name
+            ),
+            incumbent_name=_student_submission_name(
+                incumbent_submission, "incumbent", args.incumbent_name, fallback=args.incumbent_fallback_name
+            ),
             race_count=int(args.races),
             round_seconds=float(args.round_seconds),
             random_seed=int(args.seed),

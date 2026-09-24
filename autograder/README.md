@@ -2,15 +2,12 @@
 
 This directory contains the competition and leaderboard grader. The separate
 four-level individual exercise grader is documented in
-[`exercise/README.md`](exercise/README.md); both graders are intentionally kept
-in the repository.
+[`exercise/README.md`](exercise/README.md); both graders remain available.
 
-Build an upload-ready archive by naming the two required student modules:
+Build the upload-ready autograder archive with:
 
 ```bash
-uv run python scripts/build_gradescope_autograder.py \
-  controllers.minimum_viable \
-  controllers.race_faster
+uv run python scripts/build_gradescope_autograder.py
 ```
 
 The script prints the archive path. By default it writes
@@ -18,114 +15,111 @@ The script prints the archive path. By default it writes
 another destination. Upload the zip itself to Gradescope; `setup.sh` and
 `run_autograder` are at the archive root as Gradescope requires.
 
-## Submission layouts
+## Submission contract
 
-The autograder accepts preserved package paths such as
-`controllers/minimum_viable.py` and `src/controllers/minimum_viable.py`. It also
-accepts Gradescope's flattened single-file upload when the matching basename is
-unambiguous. Both configured modules must be present.
-
-## Rubric (100 points)
-
-| Check | Points |
-| --- | ---: |
-| Pyright strict mode, minimum module | 5 |
-| Pyright strict mode, improved module | 5 |
-| Ruff default lint rules, minimum module | 2.5 |
-| Ruff default lint rules, improved module | 2.5 |
-| Ruff default formatter, minimum module | 2.5 |
-| Ruff default formatter, improved module | 2.5 |
-| Valid `control` callable, minimum module | 5 |
-| Valid `control` callable, improved module | 5 |
-| Minimum module completes at least one lap on both seeds | 20 |
-| Minimum module finishes 30 seconds with exactly zero damage on both seeds | 15 |
-| Minimum module has zero wall-contact time on both seeds | 15 |
-| Improved module finishes 30 seconds without elimination on both seeds | 10 |
-| Improved module travels strictly farther than the minimum module on each seed | 10 |
-
-The deterministic seeds are 110 and 2026. Race trials run for 30 simulated
-seconds at 60 Hz with marshal recovery disabled. The minimum controller's
-no-damage check requires a final damage value of zero. “Survives” for the
-improved controller means the car was not eliminated and ended below 100%
-damage. The progress comparison uses raw forward track progress. Damage is
-reported separately and never multiplies the distance score.
-
-Every check is module-specific. A submission containing only the minimum module
-still receives Pyright, Ruff, callable, and seeded race feedback for that file
-and can earn all 65 minimum-module points. The missing improved module receives
-zero on its 35 points and is not eligible for the leaderboard.
-
-Ruff runs with `--isolated`, so “defaults” means Ruff's own default lint and
-format configuration, independent of this repository's instructor settings.
-Pyright uses strict type-checking with Python 3.11 and the trusted simulator's
-typed package available on its import path.
-
-## Leaderboard
-
-Leaderboard metrics come from the improved module and average its runs on
-seeds 110 and 2026:
-
-- Laps (partial): forward progress divided by track length; descending.
-- Top speed in meters per second; descending.
-- First lap time in seconds; ascending.
-- Best completed lap time in seconds; ascending.
-
-If the improved controller is eliminated or reaches 100% damage on either run,
-the submission is disqualified and the result exports no leaderboard values.
-If it survives both runs but fails to complete a lap on either seed, lap-time
-fields display `No lap` while distance and speed are still reported.
-
-## Exporting a student submission
-
-Students can export only the required controller modules—without the simulator,
-tests, notebooks, or other repository files—with:
+Each submission selects exactly one controller when it is exported:
 
 ```bash
-uv run python scripts/export_student_controllers.py \
-  controllers.minimum_viable \
-  controllers.race_faster
+uv run python scripts/export_student_controllers.py controllers.race_faster
 ```
 
-The default output is `artifacts/formula110-student-controllers.zip`. Its files
-are rooted at `controllers/`, which the autograder accepts directly. Local
-`controllers.*` imports are followed recursively, so Python helper modules are
-included automatically. A student who has completed only the minimum milestone
-can export only that module:
+The default output is `artifacts/formula110-student-controllers.zip`. It
+contains:
 
-```bash
-uv run python scripts/export_student_controllers.py controllers.minimum_viable
-```
+- `formula110-submission.json`, naming the one `controllers.*` module to grade.
+- The complete `src/controllers/` tree rooted at `controllers/`, including
+  checkpoints and other runtime assets.
+- `pyproject.toml` and `uv.lock` for runtime dependency installation.
 
-For dynamically loaded modules or non-Python data files, export the complete
-directory:
+Generated `__pycache__` directories, `.pyc` files, and `py.typed` markers are
+omitted. Other project content—such as the simulator, tests, notebooks, and
+virtual environments—is not included.
 
-```bash
-uv run python scripts/export_student_controllers.py --all-controllers
-```
+The grader reads the manifest and evaluates only its selected controller. Other
+Python modules in `controllers/` remain available as helpers but are never
+implicitly selected. Before loading the controller, the grader syncs its
+`pyproject.toml` runtime dependencies, honoring `uv.lock` when present.
+Development dependency groups and installation of the submitted project itself
+are skipped.
 
-Enable leaderboards in the Gradescope assignment settings. Use the current
+## Grading and leaderboard
+
+The selected controller runs for 30 simulated seconds on deterministic seeds
+110, 2026, 1893, 7656, and 9340. Every seed uses the same track shape and
+distance; only the starting offset changes. The five starts cover the five
+equal-length fifths of the lap:
+
+| Seed | Centerline progress | Approximate landmark |
+| ---: | ---: | --- |
+| 110 | 4.95% | Start straight |
+| 1893 | 28.56% | San Donato exit toward Luco |
+| 2026 | 54.30% | Materassi exit |
+| 7656 | 65.27% | Borgo crest toward Casanova approach |
+| 9340 | 81.31% | Return Bend |
+
+The single 100-point check passes when every run finishes the full duration and
+records positive forward track progress.
+
+Marshal recovery is enabled. A car that remains stuck for 2 seconds is reset
+onto the track with its damage preserved, a 5-meter scored-distance penalty,
+and a 2-second recovery cooldown. Crossing the outer off-track recovery
+boundary can trigger an immediate reset. Raw progress remains available in the
+trial diagnostics, while All Spawns, No Crumbs uses penalty-adjusted progress.
+
+The leaderboard reports the recommended initial trophy set:
+
+- All Spawns, No Crumbs: worst starting offset's penalty-adjusted partial-lap progress;
+  descending.
+- Clock It: mean fastest lap with no damage or wall contact; ascending.
+- Hits Different: total final damage accumulated across all five completed runs;
+  descending.
+- Sips Tea: mean lowest accumulated horizontal g-load; ascending.
+- Gs Going Crazy: mean highest accumulated horizontal g-load on a lap without
+  wall contact; descending.
+- Gas Locked In: mean fastest completed lap with no actual brake application;
+  ascending.
+- Serving Sideways: mean greatest qualifying drift distance in a completed lap;
+  descending.
+- Speedmaxxing: mean highest rolling one-second forward speed contained in a
+  completed lap, reported in mph; descending.
+
+The student-facing report prints every leaderboard metric, using `N/A` when a
+metric is unavailable for that submission. Unavailable metrics are omitted
+from the Gradescope `leaderboard` array so every emitted sortable value remains
+numeric; qualifying controllers still appear through their available metrics.
+
+A controller is disqualified from the leaderboard if a run fails, makes no
+forward progress, ends early, or the car is eliminated or reaches 100% damage.
+If every run qualifies but one starting offset has no eligible lap for a
+trophy, that field displays `N/A` in the submission report and is omitted from
+the sortable leaderboard values. All Spawns, No Crumbs is still reported, so a
+qualifying controller without a completed lap still appears on the leaderboard.
+
+## Runtime and operations
+
+Enable leaderboards in the Gradescope assignment settings and use the current
 Ubuntu 22.04 base image. `setup.sh` installs an isolated Python 3.11 runtime,
-Panda3D/Ursina, Pyright, and Ruff. It also installs the simulator source bundled
-at build time as a read-only trusted package.
-
-## Reliability and security choices
+Panda3D/Ursina, and the simulator source bundled at build time as a read-only
+trusted package. Media assets are omitted because grading is headless. Runtime
+dependency syncing preserves the grader's installed packages.
 
 The grader writes an initial `results.json` before doing any work and replaces
 it as checks complete. Student controllers execute in separate, timed,
 resource-limited subprocesses as an unprivileged user. Inference runs in a
 CPU-only environment, and the controller worker is stopped if its resident
-process-tree memory exceeds 512 MiB. Autograder source and results are root-only,
-and the student's submission is made read-only before execution. Each
-module/seed pair gets a fresh Python process so controller global state cannot
-leak between seeded trials.
+process-tree memory exceeds 1.5 GiB. Autograder source and results are root-only,
+and the student's submission is made read-only before execution. Each seeded
+trial gets a fresh Python process so controller state cannot leak between runs.
+Controller imports, factory construction, and checkpoint loading have a separate
+30-second startup budget; after readiness, every control response retains the
+0.5-second per-tick deadline.
 
 When debugging through Gradescope SSH, run `/autograder/run_autograder`, then
-inspect `/autograder/results/results.json`. The launcher prints those two stages
-to the terminal. Controller startup failures include the unprivileged process's
-exit code and startup diagnostic in the corresponding rubric item.
+inspect `/autograder/results/results.json`. Controller startup failures include
+the unprivileged process's exit code and startup diagnostic.
 
-Before release, use Gradescope's **Test Autograder** workflow with at least one
-known passing submission and submissions with missing modules, type errors,
-format errors, exceptions, infinite loops, wall contact, and race-ending
-damage. Headless physics can vary if the dependency versions or base image are
-changed; this bundle pins all simulator and checking dependencies.
+Before release, use Gradescope's **Test Autograder** workflow with known passing
+and failing submissions, including a missing or invalid manifest, a missing
+target module, dependency failures, exceptions, infinite loops, zero-progress
+runs, and race-ending damage. Headless physics can vary if dependency versions
+or the base image change; this bundle pins the simulator dependencies.

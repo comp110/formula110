@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 AUTOGRADER_ROOT = Path("/autograder")
 CONFIG_PATH = Path("/opt/formula110-autograder/config.json")
@@ -18,8 +20,24 @@ RUNTIME_PATH = Path("/opt/formula110-runtime")
 VENV_PATH = AUTOGRADER_ROOT / "venv"
 SUBMISSION_PATH = AUTOGRADER_ROOT / "submission"
 RESULTS_PATH = AUTOGRADER_ROOT / "results" / "results.json"
+UV_PATH = Path("/usr/local/bin/uv")
 RESULT_PREFIX = "FORMULA110_RESULT="
 MAX_DIAGNOSTIC_CHARS = 6000
+DEPENDENCY_SYNC_TIMEOUT_SECONDS = 300.0
+CONTROL_VALIDATION_TIMEOUT_SECONDS = 35.0
+MODULE_NAME_PATTERN = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
+METRIC_ZERO_EPSILON = 1e-9
+METERS_PER_SECOND_TO_MILES_PER_HOUR = 2.2369362920544
+LEADERBOARD_METRIC_NAMES = (
+    "All Spawns, No Crumbs (Laps)",
+    "Clock It (s)",
+    "Hits Different (damage %)",
+    "Sips Tea (g-s)",
+    "Gs Going Crazy (g-s)",
+    "Gas Locked In (s)",
+    "Serving Sideways (m)",
+    "Speedmaxxing (mph)",
+)
 
 
 def read_config() -> dict[str, Any]:
@@ -67,6 +85,31 @@ def locate_module(module_name: str) -> tuple[Path | None, str]:
     return None, f"expected {relative} (or src/{relative}) in the submission"
 
 
+def read_submission_controller(manifest_name: str) -> tuple[str | None, str]:
+    """Read and validate the one controller module selected by the exporter."""
+    manifest = SUBMISSION_PATH / manifest_name
+    if not manifest.is_file() or manifest.is_symlink():
+        return None, f"expected {manifest_name} at the root of the submission"
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        return None, f"could not read {manifest_name}: {error}"
+    if not isinstance(payload, dict):
+        return None, f"{manifest_name} has an unsupported schema"
+    payload = cast(dict[str, object], payload)
+    if payload.get("schema_version") != 1:
+        return None, f"{manifest_name} has an unsupported schema"
+    module_name = payload.get("controller_module")
+    if (
+        not isinstance(module_name, str)
+        or module_name.endswith(".py")
+        or MODULE_NAME_PATTERN.fullmatch(module_name) is None
+        or not module_name.startswith("controllers.")
+    ):
+        return None, f"{manifest_name} does not name a valid controllers.* module"
+    return module_name, f"{manifest_name} selects {module_name}"
+
+
 def run_command(command: list[str], *, timeout_seconds: float) -> tuple[bool, str]:
     try:
         completed = subprocess.run(
@@ -83,6 +126,8 @@ def run_command(command: list[str], *, timeout_seconds: float) -> tuple[bool, st
                 "HOME": "/tmp/formula110-grader",
                 "PATH": f"{VENV_PATH / 'bin'}:/usr/bin:/bin",
                 "PYTHONPATH": str(RUNTIME_PATH),
+                "VIRTUAL_ENV": str(VENV_PATH),
+                "UV_PYTHON_DOWNLOADS": "never",
             },
         )
     except subprocess.TimeoutExpired:
@@ -93,46 +138,49 @@ def run_command(command: list[str], *, timeout_seconds: float) -> tuple[bool, st
     return completed.returncode == 0, output
 
 
-def static_checks(module_file: Path | None, check_id: str) -> dict[str, tuple[bool, str]]:
-    if module_file is None:
-        message = "cannot run because this module file is missing"
-        return {"pyright": (False, message), "ruff_lint": (False, message), "ruff_format": (False, message)}
-    files = [str(module_file)]
+def locate_submission_pyproject() -> tuple[Path | None, str]:
+    """Locate the project file without accepting an ambiguous upload."""
+    direct = SUBMISSION_PATH / "pyproject.toml"
+    if direct.is_file() and not direct.is_symlink():
+        return direct.resolve(), "found pyproject.toml"
 
-    pyright_config = {
-        "pythonVersion": "3.11",
-        "pythonPlatform": "Linux",
-        "typeCheckingMode": "strict",
-        "reportMissingTypeStubs": False,
-        "executionEnvironments": [
-            {
-                "root": str(SUBMISSION_PATH),
-                "extraPaths": [str(RUNTIME_PATH), str(SUBMISSION_PATH), str(SUBMISSION_PATH / "src")],
-            }
-        ],
-    }
-    config_path = RESULTS_PATH.parent / f"pyrightconfig-{check_id}.json"
-    config_path.write_text(json.dumps(pyright_config), encoding="utf-8")
-    pyright = run_command(
-        [
-            str(VENV_PATH / "bin" / "pyright"),
-            "--pythonpath",
-            str(VENV_PATH / "bin" / "python"),
-            "--project",
-            str(config_path),
-            *files,
-        ],
-        timeout_seconds=30.0,
+    matches = sorted(
+        path.resolve() for path in SUBMISSION_PATH.rglob("pyproject.toml") if path.is_file() and not path.is_symlink()
     )
-    ruff_lint = run_command(
-        [str(VENV_PATH / "bin" / "ruff"), "check", "--isolated", *files],
-        timeout_seconds=15.0,
-    )
-    ruff_format = run_command(
-        [str(VENV_PATH / "bin" / "ruff"), "format", "--check", "--isolated", *files],
-        timeout_seconds=15.0,
-    )
-    return {"pyright": pyright, "ruff_lint": ruff_lint, "ruff_format": ruff_format}
+    if len(matches) == 1:
+        relative = matches[0].relative_to(SUBMISSION_PATH)
+        return matches[0], f"found {relative}"
+    if len(matches) > 1:
+        names = ", ".join(str(path.relative_to(SUBMISSION_PATH)) for path in matches[:8])
+        return None, f"multiple possible pyproject.toml files: {names}"
+    return None, "expected pyproject.toml in the submission"
+
+
+def sync_submission_dependencies() -> tuple[bool, str]:
+    """Install submission runtime dependencies into the existing grader venv."""
+    pyproject, location = locate_submission_pyproject()
+    if pyproject is None:
+        return False, location
+
+    command = [
+        str(UV_PATH),
+        "sync",
+        "--project",
+        str(pyproject.parent),
+        "--active",
+        "--inexact",
+        "--no-dev",
+        "--no-default-groups",
+        "--no-install-project",
+        "--no-python-downloads",
+    ]
+    lockfile = pyproject.with_name("uv.lock")
+    if lockfile.is_file() and not lockfile.is_symlink():
+        command.append("--locked")
+    synced, diagnostic = run_command(command, timeout_seconds=DEPENDENCY_SYNC_TIMEOUT_SECONDS)
+    if synced:
+        return True, f"{location}; runtime dependencies synchronized"
+    return False, f"{location}; dependency sync failed: {diagnostic}"
 
 
 def worker_command(arguments: list[str]) -> list[str]:
@@ -140,7 +188,6 @@ def worker_command(arguments: list[str]) -> list[str]:
     return [
         prlimit,
         "--cpu=25",
-        "--as=3221225472",
         "--fsize=1048576",
         "--nproc=128",
         "--",
@@ -188,7 +235,7 @@ def run_worker(arguments: list[str], *, timeout_seconds: float) -> dict[str, Any
             return {"ok": False, "error": f"worker returned invalid JSON: {error}"}
         if not isinstance(payload, dict):
             return {"ok": False, "error": "worker result was not an object"}
-        return payload
+        return cast(dict[str, Any], payload)
     finally:
         if output_path is not None:
             output_path.unlink(missing_ok=True)
@@ -207,7 +254,7 @@ def validate_control(module_file: Path | None, function_name: str) -> dict[str, 
             function_name,
             "--validate-only",
         ],
-        timeout_seconds=10.0,
+        timeout_seconds=CONTROL_VALIDATION_TIMEOUT_SECONDS,
     )
 
 
@@ -217,6 +264,9 @@ def run_trials(
     seeds: list[int],
     duration_seconds: float,
     timeout_seconds: float,
+    marshal_stuck_seconds: float,
+    marshal_penalty_m: float,
+    marshal_cooldown_seconds: float,
 ) -> list[dict[str, Any]]:
     if module_file is None:
         return [{"ok": False, "seed": seed, "error": "module file is missing"} for seed in seeds]
@@ -233,6 +283,12 @@ def run_trials(
                 str(seed),
                 "--seconds",
                 str(duration_seconds),
+                "--marshal-stuck-seconds",
+                str(marshal_stuck_seconds),
+                "--marshal-penalty-m",
+                str(marshal_penalty_m),
+                "--marshal-cooldown-seconds",
+                str(marshal_cooldown_seconds),
             ],
             timeout_seconds=timeout_seconds,
         )
@@ -252,226 +308,270 @@ def test_case(name: str, passed: bool, points: float, output: str, number: str) 
     }
 
 
-def validation_output(module_name: str, result: dict[str, Any]) -> str:
-    if result.get("ok") is True:
-        return f"{module_name}.control loaded, accepted RobotSensors, and returned RobotCommand."
-    return f"{module_name}: {result.get('error', 'validation failed')}"
-
-
 def trial_summary(module_name: str, trials: list[dict[str, Any]]) -> str:
     lines = [module_name]
-    for trial in trials:
-        seed = trial.get("seed", "?")
+    for seed_number, trial in enumerate(trials, start=1):
         if trial.get("ok") is not True:
-            lines.append(f"seed {seed}: ERROR — {trial.get('error', 'trial failed')}")
+            lines.append(f"seed {seed_number}: ERROR — {trial.get('error', 'trial failed')}")
             continue
         lines.append(
-            f"seed {seed}: {float(trial['partial_laps']):.3f} laps, "
+            f"seed {seed_number}: {float(trial['elapsed_seconds']):.1f} s, "
+            f"{float(trial['partial_laps']):.3f} laps, "
             f"{float(trial['raw_distance_m']):.1f} m, "
-            f"top {float(trial['max_speed_mps']):.2f} m/s, "
+            f"top {float(trial['max_speed_mps']) * METERS_PER_SECOND_TO_MILES_PER_HOUR:.2f} mph, "
             f"damage {float(trial['damage']) * 100.0:.1f}%, "
-            f"wall contact {float(trial['wall_contact_seconds']):.3f} s"
+            f"wall contact {float(trial['wall_contact_seconds']):.3f} s, "
+            f"marshals {int(trial.get('marshal_count', 0))}"
         )
     return "\n".join(lines)
 
 
-def all_trials(trials: list[dict[str, Any]], predicate: Any) -> bool:
+def serial_numbered_trials(trials: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Replace private seed values with their one-based run numbers."""
+    return [{**trial, "seed": seed_number} for seed_number, trial in enumerate(trials, start=1)]
+
+
+def all_trials(trials: list[dict[str, Any]], predicate: Callable[[dict[str, Any]], bool]) -> bool:
     return bool(trials) and all(trial.get("ok") is True and predicate(trial) for trial in trials)
 
 
-def mean_metric(trials: list[dict[str, Any]], key: str) -> float:
-    return sum(float(trial[key]) for trial in trials) / len(trials)
+def completed_with_forward_progress(trial: dict[str, Any], duration_seconds: float) -> bool:
+    """Return whether a trial ran for the configured duration and moved forward."""
+    return float(trial["elapsed_seconds"]) >= duration_seconds - 1e-6 and float(trial["raw_distance_m"]) > 1e-6
 
 
-def leaderboard_for(trials: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
-    qualified = all_trials(trials, lambda trial: bool(trial["survived"]) and float(trial["damage"]) < 1.0)
+def completed_laps(trial: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return trusted completed-lap telemetry from one worker result."""
+    laps = trial.get("laps", [])
+    if not isinstance(laps, list):
+        return []
+    return [cast(dict[str, Any], lap) for lap in cast(list[object], laps) if isinstance(lap, dict)]
+
+
+def aggregate_lap_metric(
+    trials: list[dict[str, Any]],
+    *,
+    key: str,
+    eligible: Callable[[dict[str, Any]], bool] = lambda _lap: True,
+    highest: bool = False,
+) -> float | None:
+    """Average each starting offset's best eligible completed-lap value."""
+    per_trial_values: list[float] = []
+    for trial in trials:
+        values = [float(lap[key]) for lap in completed_laps(trial) if eligible(lap)]
+        if not values:
+            return None
+        per_trial_values.append((max if highest else min)(values))
+    return sum(per_trial_values) / len(per_trial_values) if per_trial_values else None
+
+
+def leaderboard_entry(
+    name: str,
+    value: float | None,
+    *,
+    decimal_places: int,
+    ascending: bool = False,
+    scale: float = 1.0,
+) -> dict[str, Any] | None:
+    """Build a numeric Gradescope field, omitting unavailable metrics."""
+    if value is None:
+        return None
+    entry: dict[str, Any] = {
+        "name": name,
+        "value": round(value * scale, decimal_places),
+    }
+    if ascending:
+        entry["order"] = "asc"
+    return entry
+
+
+def leaderboard_report(leaderboard: list[dict[str, Any]], message: str) -> str:
+    """Format the qualification message and all metric values for students."""
+    if not leaderboard:
+        return message
+    values = {str(entry["name"]): entry["value"] for entry in leaderboard}
+    metric_lines = [f"- {name}: {values.get(name, 'N/A')}" for name in LEADERBOARD_METRIC_NAMES]
+    return "\n".join([message, "", "Leaderboard metrics:", *metric_lines])
+
+
+def clean_lap(lap: dict[str, Any]) -> bool:
+    """Return whether a lap had neither damage nor wall contact."""
+    return (
+        float(lap["damage_delta"]) <= METRIC_ZERO_EPSILON and float(lap["wall_contact_seconds"]) <= METRIC_ZERO_EPSILON
+    )
+
+
+def contact_free_lap(lap: dict[str, Any]) -> bool:
+    """Return whether a lap had no wall contact."""
+    return float(lap["wall_contact_seconds"]) <= METRIC_ZERO_EPSILON
+
+
+def brake_free_lap(lap: dict[str, Any]) -> bool:
+    """Return whether trusted actuation applied no brakes during a lap."""
+    return not bool(lap["brake_applied"])
+
+
+def leaderboard_for(trials: list[dict[str, Any]], duration_seconds: float) -> tuple[list[dict[str, Any]], str]:
+    qualified = all_trials(
+        trials,
+        lambda trial: (
+            completed_with_forward_progress(trial, duration_seconds)
+            and bool(trial["survived"])
+            and float(trial["damage"]) < 1.0
+        ),
+    )
     if not qualified:
-        return [], "Leaderboard: DQ — the improved controller did not finish both 30-second seeded runs."
+        return [], "Leaderboard: DQ — the controller did not finish every starting offset with forward progress."
 
-    leaderboard: list[dict[str, Any]] = [
-        {"name": "Laps (partial)", "value": round(mean_metric(trials, "partial_laps"), 4)},
-        {"name": "Top speed (m/s)", "value": round(mean_metric(trials, "max_speed_mps"), 3)},
+    endurance = min(float(trial["partial_laps"]) for trial in trials)
+    clean_hot_lap = aggregate_lap_metric(
+        trials,
+        key="duration_seconds",
+        eligible=clean_lap,
+    )
+    total_damage = sum(float(trial["damage"]) for trial in trials)
+    smooth_operator = aggregate_lap_metric(trials, key="horizontal_g_seconds")
+    g_force_junkie = aggregate_lap_metric(
+        trials,
+        key="horizontal_g_seconds",
+        eligible=contact_free_lap,
+        highest=True,
+    )
+    brake_is_lava = aggregate_lap_metric(
+        trials,
+        key="duration_seconds",
+        eligible=brake_free_lap,
+    )
+    drift_queen = aggregate_lap_metric(trials, key="drift_distance_m", highest=True)
+    full_send_mps = aggregate_lap_metric(trials, key="sustained_top_speed_mps", highest=True)
+    full_send_mph = None if full_send_mps is None else full_send_mps * METERS_PER_SECOND_TO_MILES_PER_HOUR
+
+    leaderboard = [
+        entry
+        for entry in (
+            leaderboard_entry("All Spawns, No Crumbs (Laps)", endurance, decimal_places=4),
+            leaderboard_entry("Clock It (s)", clean_hot_lap, decimal_places=3, ascending=True),
+            leaderboard_entry("Hits Different (damage %)", total_damage, decimal_places=2, scale=100.0),
+            leaderboard_entry("Sips Tea (g-s)", smooth_operator, decimal_places=3, ascending=True),
+            leaderboard_entry("Gs Going Crazy (g-s)", g_force_junkie, decimal_places=3),
+            leaderboard_entry("Gas Locked In (s)", brake_is_lava, decimal_places=3, ascending=True),
+            leaderboard_entry("Serving Sideways (m)", drift_queen, decimal_places=3),
+            leaderboard_entry("Speedmaxxing (mph)", full_send_mph, decimal_places=3),
+        )
+        if entry is not None
     ]
-    first_laps = [trial.get("first_lap_time_seconds") for trial in trials]
-    best_laps = [trial.get("best_lap_time_seconds") for trial in trials]
-    leaderboard.append(
-        {
-            "name": "First lap (s)",
-            "value": round(sum(float(value) for value in first_laps) / len(first_laps), 3)
-            if all(value is not None for value in first_laps)
-            else "No lap",
-            "order": "asc",
-        }
-    )
-    leaderboard.append(
-        {
-            "name": "Best lap (s)",
-            "value": round(sum(float(value) for value in best_laps) / len(best_laps), 3)
-            if all(value is not None for value in best_laps)
-            else "No lap",
-            "order": "asc",
-        }
-    )
-    return leaderboard, "Leaderboard: qualified; metrics average seeds 110 and 2026."
+    return leaderboard, f"Leaderboard: qualified; metrics aggregate {len(trials)} starting offsets."
 
 
 def grade() -> dict[str, Any]:
     started = time.monotonic()
     config = read_config()
-    modules = config["modules"]
-    first_name = str(modules["minimum_viable"])
-    second_name = str(modules["improved"])
+    manifest_name = str(config["submission_manifest"])
+    controller_name, manifest_message = read_submission_controller(manifest_name)
+    points = float(config["rubric"]["completion_with_forward_progress"])
+    if controller_name is None:
+        results = blank_results(manifest_message)
+        results["execution_time"] = round(time.monotonic() - started, 3)
+        results["tests"] = [
+            test_case(
+                "Controller completes 30-second runs with forward progress",
+                False,
+                points,
+                manifest_message,
+                "1",
+            )
+        ]
+        return results
+
+    controller_file, controller_location = locate_module(controller_name)
+    if controller_file is None:
+        results = blank_results(f"{manifest_message}\n{controller_location}")
+        results["execution_time"] = round(time.monotonic() - started, 3)
+        results["tests"] = [
+            test_case(
+                "Controller completes 30-second runs with forward progress",
+                False,
+                points,
+                controller_location,
+                "1",
+            )
+        ]
+        return results
+
+    dependencies_synced, dependency_message = sync_submission_dependencies()
+    if not dependencies_synced:
+        results = blank_results(
+            "Submission dependency installation failed before controller execution.\n\n" + dependency_message
+        )
+        results["execution_time"] = round(time.monotonic() - started, 3)
+        results["tests"] = [
+            test_case(
+                "Controller completes 30-second runs with forward progress",
+                False,
+                points,
+                dependency_message,
+                "1",
+            )
+        ]
+        return results
+
     function_name = str(config["control_function"])
     seeds = [int(seed) for seed in config["seeds"]]
     duration = float(config["duration_seconds"])
     trial_timeout = float(config["trial_timeout_seconds"])
-    points = config["rubric"]
+    marshal = config["marshal"]
+    if not isinstance(marshal, dict):
+        raise TypeError("marshal configuration must be an object")
+    marshal = cast(dict[str, Any], marshal)
 
-    first_file, first_location = locate_module(first_name)
-    second_file, second_location = locate_module(second_name)
-    first_checks = static_checks(first_file, "minimum")
-    second_checks = static_checks(second_file, "improved")
-    first_validation = validate_control(first_file, function_name)
-    second_validation = validate_control(second_file, function_name)
-    first_trials = (
-        run_trials(first_file, function_name, seeds, duration, trial_timeout)
-        if first_validation.get("ok") is True
-        else [{"ok": False, "seed": seed, "error": "control validation failed"} for seed in seeds]
-    )
-    second_trials = (
-        run_trials(second_file, function_name, seeds, duration, trial_timeout)
-        if second_validation.get("ok") is True
-        else [{"ok": False, "seed": seed, "error": "control validation failed"} for seed in seeds]
-    )
-
-    first_summary = trial_summary(first_name, first_trials)
-    second_summary = trial_summary(second_name, second_trials)
-    improvement_lines: list[str] = []
-    improved_each_seed = True
-    for seed, first, second in zip(seeds, first_trials, second_trials, strict=True):
-        if first.get("ok") is not True or second.get("ok") is not True:
-            improved_each_seed = False
-            improvement_lines.append(f"seed {seed}: comparison unavailable")
-            continue
-        first_distance = float(first["raw_distance_m"])
-        second_distance = float(second["raw_distance_m"])
-        difference = second_distance - first_distance
-        if difference <= 1e-6:
-            improved_each_seed = False
-        improvement_lines.append(
-            f"seed {seed}: improved {second_distance:.1f} m vs minimum {first_distance:.1f} m ({difference:+.1f} m)"
+    validation = validate_control(controller_file, function_name)
+    trials = (
+        run_trials(
+            controller_file,
+            function_name,
+            seeds,
+            duration,
+            trial_timeout,
+            float(marshal["stuck_seconds"]),
+            float(marshal["distance_penalty_m"]),
+            float(marshal["cooldown_seconds"]),
         )
-
+        if validation.get("ok") is True
+        else [
+            {
+                "ok": False,
+                "seed": seed,
+                "error": f"control validation failed: {validation.get('error', 'invalid controller')}",
+            }
+            for seed in seeds
+        ]
+    )
+    summary = trial_summary(controller_name, trials)
+    passed = all_trials(trials, lambda trial: completed_with_forward_progress(trial, duration))
     tests = [
         test_case(
-            "Minimum module: strict type checking",
-            first_checks["pyright"][0],
-            float(points["minimum_pyright_strict"]),
-            first_checks["pyright"][1],
-            "1.1",
-        ),
-        test_case(
-            "Improved module: strict type checking",
-            second_checks["pyright"][0],
-            float(points["improved_pyright_strict"]),
-            second_checks["pyright"][1],
-            "1.2",
-        ),
-        test_case(
-            "Minimum module: Ruff default lint rules",
-            first_checks["ruff_lint"][0],
-            float(points["minimum_ruff_lint"]),
-            first_checks["ruff_lint"][1],
-            "1.3",
-        ),
-        test_case(
-            "Improved module: Ruff default lint rules",
-            second_checks["ruff_lint"][0],
-            float(points["improved_ruff_lint"]),
-            second_checks["ruff_lint"][1],
-            "1.4",
-        ),
-        test_case(
-            "Minimum module: Ruff formatting",
-            first_checks["ruff_format"][0],
-            float(points["minimum_ruff_format"]),
-            first_checks["ruff_format"][1],
-            "1.5",
-        ),
-        test_case(
-            "Improved module: Ruff formatting",
-            second_checks["ruff_format"][0],
-            float(points["improved_ruff_format"]),
-            second_checks["ruff_format"][1],
-            "1.6",
-        ),
-        test_case(
-            "Minimum module defines a valid control function",
-            first_validation.get("ok") is True,
-            float(points["minimum_control"]),
-            validation_output(first_name, first_validation),
-            "2.1",
-        ),
-        test_case(
-            "Improved module defines a valid control function",
-            second_validation.get("ok") is True,
-            float(points["improved_control"]),
-            validation_output(second_name, second_validation),
-            "2.2",
-        ),
-        test_case(
-            "Minimum module completes a lap on both seeds",
-            all_trials(first_trials, lambda trial: int(trial["lap_count"]) >= 1),
-            float(points["minimum_lap"]),
-            first_summary,
-            "3.1",
-        ),
-        test_case(
-            "Minimum module finishes 30 seconds with no damage on both seeds",
-            all_trials(
-                first_trials,
-                lambda trial: bool(trial["survived"]) and float(trial["damage"]) <= 1e-9,
-            ),
-            float(points["minimum_no_damage"]),
-            first_summary,
-            "3.2",
-        ),
-        test_case(
-            "Minimum module avoids all wall contact on both seeds",
-            all_trials(first_trials, lambda trial: float(trial["wall_contact_seconds"]) <= 1e-9),
-            float(points["minimum_no_walls"]),
-            first_summary,
-            "3.3",
-        ),
-        test_case(
-            "Improved module survives 30 seconds on both seeds",
-            all_trials(second_trials, lambda trial: bool(trial["survived"])),
-            float(points["improved_survival"]),
-            second_summary,
-            "4.1",
-        ),
-        test_case(
-            "Improved module goes farther on both seeds",
-            improved_each_seed,
-            float(points["improved_distance"]),
-            "\n".join(improvement_lines),
-            "4.2",
-        ),
+            "Controller completes 30-second runs with forward progress",
+            passed,
+            points,
+            summary,
+            "1",
+        )
     ]
-    leaderboard, leaderboard_message = leaderboard_for(second_trials)
+    leaderboard, leaderboard_message = leaderboard_for(trials, duration)
+    leaderboard_output = leaderboard_report(leaderboard, leaderboard_message)
     return {
         "execution_time": round(time.monotonic() - started, 3),
-        "output": (
-            f"Required modules:\n- {first_name}: {first_location}\n- {second_name}: {second_location}\n\n"
-            f"{leaderboard_message}"
-        ),
+        "output": (f"Submission: {manifest_message}\nController: {controller_location}\n\n{leaderboard_output}"),
         "output_format": "text",
         "test_output_format": "text",
         "test_name_format": "text",
         "stdout_visibility": "hidden",
         "tests": tests,
         "leaderboard": leaderboard,
-        "extra_data": {"minimum_trials": first_trials, "improved_trials": second_trials},
+        "extra_data": {
+            "controller_module": controller_name,
+            "controller_trials": serial_numbered_trials(trials),
+        },
     }
 
 

@@ -16,6 +16,7 @@ import struct
 import subprocess
 import sys
 import time
+from collections import deque
 from importlib import import_module
 from pathlib import Path
 from types import TracebackType
@@ -25,8 +26,15 @@ RESULT_PREFIX = "FORMULA110_RESULT="
 CONTROL_WORKER_PATH = Path(os.environ.get("FORMULA110_CONTROL_WORKER", "/opt/formula110-autograder/control_worker.py"))
 MAX_RESPONSE_BYTES = 4096
 COMMAND_TIMEOUT_SECONDS = 0.5
-CONTROLLER_MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
+CONTROLLER_STARTUP_TIMEOUT_SECONDS = 30.0
+CONTROLLER_MEMORY_LIMIT_BYTES = 1536 * 1024 * 1024
 CONTROLLER_MEMORY_POLL_SECONDS = 0.02
+STANDARD_GRAVITY_MPS2 = 9.80665
+BRAKE_FORCE_EPSILON = 1e-9
+DRIFT_MIN_SPEED_MPS = 8.0
+DRIFT_MIN_SLIP_DEGREES = 12.0
+DRIFT_MAX_SLIP_DEGREES = 45.0
+SUSTAINED_SPEED_WINDOW_SECONDS = 1.0
 CPU_ONLY_ENVIRONMENT = {
     "FORMULA110_DEVICE": "cpu",
     "CUDA_VISIBLE_DEVICES": "",
@@ -41,6 +49,135 @@ CPU_ONLY_ENVIRONMENT = {
 }
 
 
+class LapTelemetryAccumulator:
+    """Trusted metrics accumulated between two lap boundaries."""
+
+    __slots__ = (
+        "_speed_window",
+        "_speed_window_duration_seconds",
+        "_speed_window_integral_m",
+        "brake_applied",
+        "damage_at_start",
+        "drift_distance_m",
+        "horizontal_g_seconds",
+        "started_at_seconds",
+        "sustained_top_speed_mps",
+        "wall_contact_seconds",
+    )
+
+    def __init__(self, *, started_at_seconds: float, damage_at_start: float) -> None:
+        self.started_at_seconds = started_at_seconds
+        self.damage_at_start = damage_at_start
+        self.wall_contact_seconds = 0.0
+        self.horizontal_g_seconds = 0.0
+        self.brake_applied = False
+        self.drift_distance_m = 0.0
+        self.sustained_top_speed_mps = 0.0
+        self._speed_window = deque()
+        self._speed_window_duration_seconds = 0.0
+        self._speed_window_integral_m = 0.0
+
+    def record_step(
+        self,
+        *,
+        delta_seconds: float,
+        wall_contact: bool,
+        horizontal_g_seconds: float,
+        brake_applied: bool,
+        drift_distance_m: float,
+        forward_speed_mps: float,
+    ) -> None:
+        """Add one fixed physics step to this lap."""
+        bounded_delta_seconds = max(0.0, delta_seconds)
+        if wall_contact:
+            self.wall_contact_seconds += bounded_delta_seconds
+        self.horizontal_g_seconds += max(0.0, horizontal_g_seconds)
+        self.brake_applied = self.brake_applied or brake_applied
+        self.drift_distance_m += max(0.0, drift_distance_m)
+        self._record_speed_sample(
+            speed_mps=max(0.0, forward_speed_mps),
+            delta_seconds=bounded_delta_seconds,
+        )
+
+    def _record_speed_sample(self, *, speed_mps: float, delta_seconds: float) -> None:
+        if delta_seconds <= 0.0:
+            return
+        self._speed_window.append((delta_seconds, speed_mps))
+        self._speed_window_duration_seconds += delta_seconds
+        self._speed_window_integral_m += speed_mps * delta_seconds
+
+        excess_seconds = self._speed_window_duration_seconds - SUSTAINED_SPEED_WINDOW_SECONDS
+        while excess_seconds > 1e-12 and self._speed_window:
+            first_duration_seconds, first_speed_mps = self._speed_window[0]
+            removed_seconds = min(excess_seconds, first_duration_seconds)
+            self._speed_window_duration_seconds -= removed_seconds
+            self._speed_window_integral_m -= first_speed_mps * removed_seconds
+            excess_seconds -= removed_seconds
+            if removed_seconds >= first_duration_seconds - 1e-12:
+                self._speed_window.popleft()
+            else:
+                self._speed_window[0] = (first_duration_seconds - removed_seconds, first_speed_mps)
+
+        if self._speed_window_duration_seconds >= SUSTAINED_SPEED_WINDOW_SECONDS - 1e-12:
+            rolling_average_mps = self._speed_window_integral_m / SUSTAINED_SPEED_WINDOW_SECONDS
+            self.sustained_top_speed_mps = max(self.sustained_top_speed_mps, rolling_average_mps)
+
+    def completed_lap(self, *, ended_at_seconds: float, damage_at_end: float) -> dict[str, object]:
+        """Return the JSON-compatible metrics for a completed lap."""
+        return {
+            "duration_seconds": max(0.0, ended_at_seconds - self.started_at_seconds),
+            "damage_delta": max(0.0, damage_at_end - self.damage_at_start),
+            "wall_contact_seconds": self.wall_contact_seconds,
+            "horizontal_g_seconds": self.horizontal_g_seconds,
+            "brake_applied": self.brake_applied,
+            "drift_distance_m": self.drift_distance_m,
+            "sustained_top_speed_mps": self.sustained_top_speed_mps,
+        }
+
+
+def _wrapped_angle_degrees(angle_degrees: float) -> float:
+    return (angle_degrees + 180.0) % 360.0 - 180.0
+
+
+def horizontal_g_seconds_for_step(
+    *,
+    speed_before_mps: float,
+    speed_after_mps: float,
+    heading_before_degrees: float,
+    heading_after_degrees: float,
+    delta_seconds: float,
+) -> float:
+    """Measure absolute horizontal g-load integrated over one physics step."""
+    if delta_seconds <= 0.0:
+        return 0.0
+    forward_acceleration_mps2 = (speed_after_mps - speed_before_mps) / delta_seconds
+    yaw_rate_degrees_per_s = _wrapped_angle_degrees(heading_after_degrees - heading_before_degrees) / delta_seconds
+    lateral_acceleration_mps2 = speed_after_mps * math.radians(yaw_rate_degrees_per_s)
+    horizontal_g = math.hypot(forward_acceleration_mps2, lateral_acceleration_mps2) / STANDARD_GRAVITY_MPS2
+    return horizontal_g * delta_seconds
+
+
+def absolute_slip_angle_degrees(*, velocity_x_mps: float, velocity_z_mps: float, heading_degrees: float) -> float:
+    """Return the unsigned angle between chassis heading and horizontal velocity."""
+    if math.hypot(velocity_x_mps, velocity_z_mps) <= 1e-9:
+        return 0.0
+    velocity_heading_degrees = math.degrees(math.atan2(velocity_x_mps, velocity_z_mps))
+    return abs(_wrapped_angle_degrees(velocity_heading_degrees - heading_degrees))
+
+
+def _robot_signed_speed_mps(robot: Any) -> float:
+    return float(robot.vehicle.getCurrentSpeedKmHour()) / 3.6
+
+
+def _robot_heading_degrees(robot: Any) -> float:
+    return float(robot.chassis_np.getH())
+
+
+def _robot_horizontal_velocity_mps(robot: Any) -> tuple[float, float]:
+    velocity = robot.chassis_np.node().getLinearVelocity()
+    return float(velocity[0]), float(velocity[2])
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--submission", type=Path, required=True)
@@ -48,6 +185,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--function", default="control")
     parser.add_argument("--seed", type=int, default=110)
     parser.add_argument("--seconds", type=float, default=30.0)
+    parser.add_argument("--marshal-stuck-seconds", type=float, default=2.0)
+    parser.add_argument("--marshal-penalty-m", type=float, default=5.0)
+    parser.add_argument("--marshal-cooldown-seconds", type=float, default=2.0)
     parser.add_argument("--validate-only", action="store_true")
     return parser.parse_args()
 
@@ -109,6 +249,16 @@ class ControllerClient:
         finally:
             os.close(response_write_fd)
         self.response_fd = response_read_fd
+        try:
+            response = self._read_response(
+                timeout_seconds=CONTROLLER_STARTUP_TIMEOUT_SECONDS,
+                timeout_message=f"controller startup exceeded {CONTROLLER_STARTUP_TIMEOUT_SECONDS:.0f} seconds",
+            )
+            if response.get("ok") is not True:
+                raise RuntimeError(str(response.get("error", "controller did not load"))[:1000])
+        except BaseException:
+            self.close()
+            raise
         return self
 
     def __exit__(
@@ -130,17 +280,12 @@ class ControllerClient:
             self.process.stdin.flush()
         except BrokenPipeError as error:
             raise RuntimeError(self._unexpected_exit_message()) from error
-        response_size = struct.unpack("!I", self._read_exact(4))[0]
-        if response_size > MAX_RESPONSE_BYTES:
-            raise RuntimeError("controller response exceeded size limit")
-        try:
-            response = json.loads(self._read_exact(response_size))
-        except json.JSONDecodeError as error:
-            raise RuntimeError("controller returned an invalid response") from error
-        if not isinstance(response, dict) or response.get("ok") is not True:
-            message = (
-                response.get("error", "controller call failed") if isinstance(response, dict) else "invalid response"
-            )
+        response = self._read_response(
+            timeout_seconds=COMMAND_TIMEOUT_SECONDS,
+            timeout_message=f"control call exceeded {COMMAND_TIMEOUT_SECONDS:.1f} seconds",
+        )
+        if response.get("ok") is not True:
+            message = response.get("error", "controller call failed")
             raise RuntimeError(str(message)[:1000])
         values = tuple(float(response[key]) for key in ("throttle", "steer"))
         if not all(math.isfinite(value) for value in values):
@@ -163,17 +308,38 @@ class ControllerClient:
             os.close(self.response_fd)
             self.response_fd = None
 
-    def _read_exact(self, byte_count: int) -> bytes:
+    def _read_response(self, *, timeout_seconds: float, timeout_message: str) -> dict[str, Any]:
+        response_size = struct.unpack(
+            "!I",
+            self._read_exact(4, timeout_seconds=timeout_seconds, timeout_message=timeout_message),
+        )[0]
+        if response_size > MAX_RESPONSE_BYTES:
+            raise RuntimeError("controller response exceeded size limit")
+        try:
+            response = json.loads(
+                self._read_exact(
+                    response_size,
+                    timeout_seconds=timeout_seconds,
+                    timeout_message=timeout_message,
+                )
+            )
+        except json.JSONDecodeError as error:
+            raise RuntimeError("controller returned an invalid response") from error
+        if not isinstance(response, dict):
+            raise RuntimeError("controller returned an invalid response")
+        return response
+
+    def _read_exact(self, byte_count: int, *, timeout_seconds: float, timeout_message: str) -> bytes:
         if self.response_fd is None:
             raise RuntimeError("controller response pipe is closed")
         chunks: list[bytes] = []
         remaining = byte_count
-        deadline = time.monotonic() + COMMAND_TIMEOUT_SECONDS
+        deadline = time.monotonic() + timeout_seconds
         while remaining:
             self._check_memory_limit()
             timeout = deadline - time.monotonic()
             if timeout <= 0.0:
-                raise TimeoutError("control call exceeded 0.5 seconds")
+                raise TimeoutError(timeout_message)
             readable, _, _ = select.select(
                 [self.response_fd],
                 [],
@@ -259,9 +425,9 @@ def _linux_process_tree_resident_memory_bytes(process_id: int) -> int | None:
             total_bytes += resident_bytes
             measured_process = True
         try:
-            children_text = Path(
-                f"/proc/{current_process_id}/task/{current_process_id}/children"
-            ).read_text(encoding="utf-8")
+            children_text = Path(f"/proc/{current_process_id}/task/{current_process_id}/children").read_text(
+                encoding="utf-8"
+            )
         except (FileNotFoundError, OSError):
             continue
         pending.extend(int(child_process_id) for child_process_id in children_text.split())
@@ -288,12 +454,16 @@ def run_trial(args: argparse.Namespace) -> dict[str, object]:
         apply_wall_impact_damage,
         create_physics_world,
         create_robot_vehicle,
+        resolve_vehicle_actuator_command,
     )
     from racing.race.progress import default_track_progress_model, project_track_position
     from racing.race.runtime import (
         RaceCarRuntime,
+        RaceRecoveryConfig,
         lap_progress_tracker_for_spawn_pose,
+        maybe_marshal_race_runtimes,
         race_contact_states,
+        race_scored_distance_m,
         race_spawn_poses,
         robot_is_eliminated,
         robot_score_damage,
@@ -301,11 +471,23 @@ def run_trial(args: argparse.Namespace) -> dict[str, object]:
         update_race_runtime_after_step,
     )
     from racing.race.sensors import build_robot_sensors
+    from racing.track.world import TRACK_WIDTH
 
     seconds = float(args.seconds)
     seed = int(args.seed)
     if seconds <= 0.0:
         raise ValueError("trial duration must be positive")
+    # Exercise solo trials also call this worker and do not enable the marshal.
+    marshal_stuck_seconds = getattr(args, "marshal_stuck_seconds", None)
+    recovery_config = (
+        RaceRecoveryConfig(
+            stuck_seconds=float(marshal_stuck_seconds),
+            distance_penalty_m=float(args.marshal_penalty_m),
+            cooldown_seconds=float(args.marshal_cooldown_seconds),
+        )
+        if marshal_stuck_seconds is not None
+        else None
+    )
     fixed_delta_seconds = 1.0 / 60.0
     configure_headless_panda()
     showbase = cast(Any, import_module("direct.showbase.ShowBase"))
@@ -339,10 +521,16 @@ def run_trial(args: argparse.Namespace) -> dict[str, object]:
         )
         elapsed_seconds = 0.0
         lap_crossing_times: list[float] = []
+        completed_laps: list[dict[str, object]] = []
         previous_lap_count = 0
+        lap_telemetry = LapTelemetryAccumulator(started_at_seconds=0.0, damage_at_start=0.0)
         with controller_client(args) as client:
             while elapsed_seconds < seconds:
-                if not robot_is_eliminated(runtime.robot):
+                step_was_active = not robot_is_eliminated(runtime.robot)
+                speed_before_mps = _robot_signed_speed_mps(runtime.robot)
+                heading_before_degrees = _robot_heading_degrees(runtime.robot)
+                brake_applied = False
+                if step_was_active:
                     sensors, runtime.sensor_state = build_robot_sensors(
                         physics_world=physics_world,
                         robot=runtime.robot,
@@ -351,10 +539,21 @@ def run_trial(args: argparse.Namespace) -> dict[str, object]:
                         dt_s=fixed_delta_seconds,
                         previous_state=runtime.sensor_state,
                     )
-                    apply_robot_vehicle_command(robot=runtime.robot, command=client.command(sensors))
+                    command = client.command(sensors)
+                    actuator_command = resolve_vehicle_actuator_command(
+                        command=command,
+                        current_speed_kmh=float(runtime.robot.vehicle.getCurrentSpeedKmHour()),
+                        config=runtime.robot.config,
+                        pending_drive_direction=runtime.robot.pending_drive_direction,
+                    )
+                    brake_applied = actuator_command.brake_force > BRAKE_FORCE_EPSILON
+                    apply_robot_vehicle_command(robot=runtime.robot, command=command)
 
                 physics_scene.step(fixed_delta_seconds)
                 next_elapsed_seconds = min(seconds, elapsed_seconds + fixed_delta_seconds)
+                speed_after_mps = _robot_signed_speed_mps(runtime.robot)
+                heading_after_degrees = _robot_heading_degrees(runtime.robot)
+                velocity_x_mps, velocity_z_mps = _robot_horizontal_velocity_mps(runtime.robot)
                 contact_state = race_contact_states(physics_world=physics_world, runtimes=(runtime,))[0]
                 apply_wall_impact_damage(
                     physics_world=physics_world,
@@ -369,9 +568,58 @@ def run_trial(args: argparse.Namespace) -> dict[str, object]:
                     elapsed_seconds=next_elapsed_seconds,
                     delta_seconds=fixed_delta_seconds,
                 )
+                if step_was_active:
+                    slip_angle_degrees = absolute_slip_angle_degrees(
+                        velocity_x_mps=velocity_x_mps,
+                        velocity_z_mps=velocity_z_mps,
+                        heading_degrees=heading_after_degrees,
+                    )
+                    wall_contact = contact_state.wall_contact > 0.0
+                    drift_distance_m = (
+                        max(0.0, runtime.tracker.last_counted_progress_delta_m)
+                        if (
+                            speed_after_mps > DRIFT_MIN_SPEED_MPS
+                            and not wall_contact
+                            and abs(projection.signed_distance_to_center_m) <= TRACK_WIDTH / 2
+                            and DRIFT_MIN_SLIP_DEGREES <= slip_angle_degrees <= DRIFT_MAX_SLIP_DEGREES
+                        )
+                        else 0.0
+                    )
+                    lap_telemetry.record_step(
+                        delta_seconds=fixed_delta_seconds,
+                        wall_contact=wall_contact,
+                        horizontal_g_seconds=horizontal_g_seconds_for_step(
+                            speed_before_mps=speed_before_mps,
+                            speed_after_mps=speed_after_mps,
+                            heading_before_degrees=heading_before_degrees,
+                            heading_after_degrees=heading_after_degrees,
+                            delta_seconds=fixed_delta_seconds,
+                        ),
+                        brake_applied=brake_applied,
+                        drift_distance_m=drift_distance_m,
+                        forward_speed_mps=speed_after_mps,
+                    )
                 while previous_lap_count < runtime.tracker.lap_count:
                     lap_crossing_times.append(next_elapsed_seconds)
+                    lap_damage = robot_score_damage(runtime.robot)
+                    completed_laps.append(
+                        lap_telemetry.completed_lap(
+                            ended_at_seconds=next_elapsed_seconds,
+                            damage_at_end=lap_damage,
+                        )
+                    )
+                    lap_telemetry = LapTelemetryAccumulator(
+                        started_at_seconds=next_elapsed_seconds,
+                        damage_at_start=lap_damage,
+                    )
                     previous_lap_count += 1
+                if recovery_config is not None:
+                    maybe_marshal_race_runtimes(
+                        runtimes=(runtime,),
+                        projections=(projection,),
+                        recovery_config=recovery_config,
+                        delta_seconds=fixed_delta_seconds,
+                    )
                 elapsed_seconds = next_elapsed_seconds
 
         lap_durations = [
@@ -379,19 +627,26 @@ def run_trial(args: argparse.Namespace) -> dict[str, object]:
             for index, crossing in enumerate(lap_crossing_times)
         ]
         damage = robot_score_damage(runtime.robot)
+        scored_distance_m = race_scored_distance_m(runtime)
         return {
             "ok": True,
             "seed": seed,
             "elapsed_seconds": elapsed_seconds,
             "raw_distance_m": runtime.tracker.best_distance_m,
-            "partial_laps": runtime.tracker.best_distance_m / model.total_length_m,
+            "scored_distance_m": scored_distance_m,
+            "partial_laps": scored_distance_m / model.total_length_m,
+            "raw_partial_laps": runtime.tracker.best_distance_m / model.total_length_m,
             "lap_count": runtime.tracker.lap_count,
             "damage": damage,
             "survived": not robot_is_eliminated(runtime.robot) and damage < 1.0,
             "wall_contact_seconds": runtime.tracker.wall_contact_seconds,
+            "off_track_seconds": runtime.off_track_seconds,
+            "marshal_count": runtime.marshal_count,
+            "marshal_penalty_m": runtime.marshal_penalty_m,
             "max_speed_mps": runtime.max_speed_mps,
             "first_lap_time_seconds": lap_crossing_times[0] if lap_crossing_times else None,
             "best_lap_time_seconds": min(lap_durations) if lap_durations else None,
+            "laps": completed_laps,
         }
     finally:
         if root is not None:

@@ -71,6 +71,13 @@ class CameraRig:
     follow_forward_samples: list[FollowForwardSample] = field(default_factory=_new_follow_forward_samples)
     follow_target_id: int | None = None
     follow_direction_initialized: bool = False
+    selected_car_id: str | None = None
+
+    def select_follow_car(self, car_id: str | None) -> None:
+        """Follow a stable entrant until another selection replaces it."""
+        self.selected_car_id = car_id
+        self.view = CameraView.FOLLOW
+        self.reset_follow_history()
 
     def reset_follow_history(self) -> None:
         """Forget recent follow-camera direction samples."""
@@ -135,7 +142,7 @@ FORMULA_DRONE_CAMERA_SETTINGS = FollowCameraSettings(
 )
 
 
-def next_camera_view(view: CameraView) -> CameraView:
+def next_camera_view(view: CameraView, *, include_split: bool = False) -> CameraView:
     """Pick the next view when the player presses the camera-cycle key."""
     if view is CameraView.TOP_DOWN:
         return CameraView.THREE_QUARTER
@@ -143,13 +150,15 @@ def next_camera_view(view: CameraView) -> CameraView:
         return CameraView.DRONE
     if view in (CameraView.DRONE, CameraView.FOLLOW_CAR):
         return CameraView.FOLLOW
+    if view is CameraView.FOLLOW and include_split:
+        return CameraView.SPLIT_FOLLOW
     return CameraView.TOP_DOWN
 
 
-def update_camera_cycle(rig: CameraRig, *, cycle_key_down: bool) -> None:
+def update_camera_cycle(rig: CameraRig, *, cycle_key_down: bool, include_split: bool = False) -> None:
     """Advance the camera mode once for each key press."""
     if cycle_key_down and not rig.cycle_key_was_down:
-        rig.view = next_camera_view(rig.view)
+        rig.view = next_camera_view(rig.view, include_split=include_split)
         rig.reset_follow_history()
     rig.cycle_key_was_down = cycle_key_down
 
@@ -165,7 +174,6 @@ def apply_camera_view(
     track_model: TrackProgressModel | None = None,
 ) -> None:
     """Move the Ursina camera to match the requested simulator view."""
-    target_x, target_y, target_z = node_position(target)
     camera_frame = _track_camera_frame(None if track_model is None else track_model.points)
     viewport_aspect = _viewport_aspect_ratio(ursina)
     ursina.camera.parent = ursina.scene
@@ -209,13 +217,41 @@ def apply_camera_view(
         )
         return
 
+    ursina.camera.orthographic = False
+    ursina.camera.fov = follow_settings.fov
+    apply_follow_camera_view(
+        ursina=ursina,
+        camera=ursina.camera,
+        lens=ursina.camera.perspective_lens,
+        target=target,
+        rig=rig,
+        delta_seconds=delta_seconds,
+        follow_settings=follow_settings,
+        track_model=track_model,
+    )
+
+
+def apply_follow_camera_view(
+    *,
+    ursina: Any,
+    camera: Any,
+    lens: Any,
+    target: Any,
+    rig: CameraRig | None = None,
+    delta_seconds: float = 0.0,
+    follow_settings: FollowCameraSettings = DEFAULT_FOLLOW_CAMERA_SETTINGS,
+    track_model: TrackProgressModel | None = None,
+) -> None:
+    """Apply the same follow pose to any scene camera with its own lens and history."""
+    target_x, target_y, target_z = node_position(target)
+    camera.parent = ursina.scene
     fallback_heading_degrees = rig.follow_heading_degrees if rig is not None else float(target.getH())
     chassis_forward_x, chassis_forward_z, chassis_heading_degrees = follow_camera_forward(
         target=target,
         ursina=ursina,
         fallback_heading_degrees=fallback_heading_degrees,
     )
-    if view in (CameraView.DRONE, CameraView.FOLLOW_CAR) and follow_settings.uses_track_lead:
+    if follow_settings.uses_track_lead:
         raw_forward_x, raw_forward_z, raw_heading_degrees = follow_camera_track_forward(
             model=track_model,
             target_x=target_x,
@@ -255,21 +291,20 @@ def apply_camera_view(
         forward_z=forward_z,
         distance=follow_settings.distance,
     )
-    ursina.camera.orthographic = False
-    ursina.camera.fov = follow_settings.fov
-    ursina.camera.position = (
+    lens.setFov(follow_settings.fov)
+    camera.position = (
         camera_x,
         target_y + follow_settings.height,
         camera_z,
     )
-    ursina.camera.look_at(
+    camera.look_at(
         (
             target_x + forward_x * follow_settings.look_ahead,
             target_y + follow_settings.look_height,
             target_z + forward_z * follow_settings.look_ahead,
         )
     )
-    ursina.camera.setR(0.0)
+    camera.setR(0.0)
 
 
 @lru_cache(maxsize=16)

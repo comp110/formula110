@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Race two submissions from an extracted Gradescope assignment export."""
+"""Race two, four, or eight submissions from an extracted Gradescope assignment export."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import cast
 
 from racing.game import cli
+from racing.race.heat import HEAT_ENTRANT_COUNTS
 from racing.race.runtime import DEFAULT_RACE_RANDOM_SEED
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -85,13 +86,14 @@ def build_parser() -> argparse.ArgumentParser:
         description=__doc__,
         allow_abbrev=False,
         epilog=(
-            "Additional racing h2h options after the two IDs are forwarded, e.g. --races 3 --round-seconds 60 "
+            "Additional racing h2h/heat options after the IDs are forwarded, e.g. --races 3 --round-seconds 60 "
             "--camera follow --no-audio. --seed controls starting positions and grid order; "
             "--track-seed INT generates a reproducible procedural track."
         ),
     )
-    parser.add_argument("challenger", type=submission_id, help="challenger submission ID")
-    parser.add_argument("incumbent", type=submission_id, help="incumbent submission ID")
+    parser.add_argument(
+        "submissions", type=submission_id, nargs="+", metavar="ID", help="two, four, or eight submission IDs"
+    )
     parser.add_argument(
         "--export-dir",
         type=Path,
@@ -107,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--headless", action="store_true", help="run without the default watched three-quarter view")
     parser.add_argument(
-        "--dry-run", action="store_true", help="print the resolved h2h command without loading controllers"
+        "--dry-run", action="store_true", help="print the resolved race command without loading controllers"
     )
     return parser
 
@@ -117,39 +119,53 @@ def main(argv: Sequence[str] | None = None) -> None:
     args, extra = parser.parse_known_args(argv)
     if extra[:1] == ["--"]:
         extra = extra[1:]
+    identifiers = cast(list[str], args.submissions)
+    if len(identifiers) not in (2, *HEAT_ENTRANT_COUNTS):
+        parser.error("provide exactly two IDs for head-to-head or four or eight IDs for a heat")
+    if len(identifiers) in HEAT_ENTRANT_COUNTS and len(set(identifiers)) != len(identifiers):
+        parser.error(f"a {len(identifiers)}-car heat requires {len(identifiers)} distinct submission IDs")
     try:
-        challenger = resolve_controller(args.export_dir.expanduser(), args.challenger)
-        incumbent = resolve_controller(args.export_dir.expanduser(), args.incumbent)
+        controllers = [resolve_controller(args.export_dir.expanduser(), identifier) for identifier in identifiers]
     except ValueError as error:
         parser.error(str(error))
 
-    h2h_args = [
-        "h2h",
-        "--challenger-module",
-        str(challenger),
-        "--incumbent-module",
-        str(incumbent),
-        "--challenger-fallback-name",
-        f"#{args.challenger}",
-        "--incumbent-fallback-name",
-        f"#{args.incumbent}",
-        "--seed",
-        str(args.seed),
-        "--camera",
-        "three_quarter",
-    ]
+    if len(identifiers) == 2:
+        runner_args = [
+            "h2h",
+            "--challenger-module",
+            str(controllers[0]),
+            "--incumbent-module",
+            str(controllers[1]),
+            "--challenger-fallback-name",
+            f"#{identifiers[0]}",
+            "--incumbent-fallback-name",
+            f"#{identifiers[1]}",
+        ]
+    else:
+        runner_args = ["heat"]
+        for identifier, controller in zip(identifiers, controllers, strict=True):
+            runner_args.extend(["--module", str(controller), "--fallback-name", f"#{identifier}"])
+    runner_args.extend(
+        [
+            "--seed",
+            str(args.seed),
+            "--camera",
+            "three_quarter",
+        ]
+    )
     if not args.headless:
-        h2h_args.append("--watch")
-    h2h_args.extend(extra)
-    race_args = cli.build_argument_parser().parse_args(h2h_args)
+        runner_args.append("--watch")
+    runner_args.extend(extra)
+    race_args = cli.build_argument_parser().parse_args(runner_args)
 
-    print(f"Challenger #{args.challenger}: {challenger}", file=sys.stderr)
-    print(f"Incumbent  #{args.incumbent}: {incumbent}", file=sys.stderr)
+    for index, (identifier, controller) in enumerate(zip(identifiers, controllers, strict=True)):
+        role = ("Challenger", "Incumbent ")[index] if len(identifiers) == 2 else f"Entrant {index + 1}"
+        print(f"{role} #{identifier}: {controller}", file=sys.stderr)
     print(f"Seed: {race_args.seed} (reuse with --seed {race_args.seed})", file=sys.stderr)
     if args.dry_run:
-        print(shlex.join([sys.executable, "-m", "racing", *h2h_args]))
+        print(shlex.join([sys.executable, "-m", "racing", *runner_args]))
         return
-    cli.main(h2h_args)
+    cli.main(runner_args)
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ from racing.graphics.colors import (
     DEFAULT_INCUMBENT_TEAM_COLOR,
     ColorRGBA,
 )
+from racing.race.heat import HeatEntrant
 from racing.race.rules import HeadToHeadRaceRules
 from racing.race.runtime import DEFAULT_RACE_RANDOM_SEED
 from racing.student.api import RobotController
@@ -30,6 +31,7 @@ class CameraView(Enum):
     DRONE = "drone"
     FOLLOW = "follow"
     FOLLOW_CAR = "follow_car"
+    SPLIT_FOLLOW = "split_follow"
 
 
 class CarShowcaseView(Enum):
@@ -119,6 +121,29 @@ class HeadToHeadViewerConfig:
     window_type: str | None = None
     challenger_team_color: ColorRGBA = DEFAULT_CHALLENGER_TEAM_COLOR
     incumbent_team_color: ColorRGBA = DEFAULT_INCUMBENT_TEAM_COLOR
+    audio: RacingAudioConfig = field(default_factory=RacingAudioConfig)
+
+
+@dataclass(frozen=True, slots=True)
+class HeatViewerConfig:
+    """Settings for a four- or eight-controller race with individual standings."""
+
+    entrants: tuple[HeatEntrant, ...] = ()
+    title: str = "Racing Heat"
+    borderless: bool = False
+    fullscreen: bool = False
+    vsync: bool = True
+    development_mode: bool = False
+    size: tuple[int, int] = (1280, 720)
+    camera_view: CameraView = CameraView.THREE_QUARTER
+    race_count: int = 1
+    round_seconds: float = DEFAULT_RACE_SECONDS
+    random_seed: int = DEFAULT_RACE_RANDOM_SEED
+    track_id: str = TRACK_ID_MUGELLO_SHORT
+    track_seed: int | None = None
+    rules: HeadToHeadRaceRules = field(default_factory=HeadToHeadRaceRules)
+    fixed_delta_seconds: float = 1 / 60
+    window_type: str | None = None
     audio: RacingAudioConfig = field(default_factory=RacingAudioConfig)
 
 

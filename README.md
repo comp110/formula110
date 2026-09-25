@@ -244,10 +244,38 @@ Each submission's `formula110-submission.json` selects its controller; older
 `formula110-exercise-submission.json` exports use their level 3 controller.
 The script also accepts IDs written as `submission_429149360`.
 
+Pass four distinct IDs to put four submissions on the same starting grid:
+
+```bash
+uv run python scripts/run_submissions.py 429149360 429458989 429929224 429859475 \
+  --seed 110 --track-seed 2026 --fullscreen
+```
+
+For an eight-car heat, pass eight distinct IDs:
+
+```bash
+uv run python scripts/run_submissions.py \
+  429929224 429859475 429894275 429570443 \
+  429692891 429458989 429149360 429712675 \
+  --seed 110 --fullscreen
+```
+
+Each submission controls one car, with its own `RACING_NAME` and `RACING_COLOR`.
+Missing names fall back to submission IDs, and missing colors receive distinct
+default paints. A heat runs all its controllers together and ranks their race
+progress. With `--races`, standings use total scored distance across those races.
+The default three-quarter view shows the shared race, and `--camera follow` follows the leader. The
+`split_follow` camera is available only for two-ID head-to-head races.
+
+Car-to-car contact counts toward the marshal's stuck timer only while the
+affected car is moving at 3 mph or less. Faster contact does not add stuck time;
+wall-contact, stationary-car, and off-track recovery still apply.
+
 Use `--seed random` to choose a new seed; the script prints it so you can replay
 the matchup with `--seed INTEGER`. This seed changes the starting position and
 grid order. Use `--track-seed INTEGER` to generate a reproducible procedural
-track. Other `racing h2h` options pass through when placed after the two IDs:
+track. Other `racing h2h` or `racing heat` options pass through when placed after
+the IDs:
 
 ```bash
 uv run python scripts/run_submissions.py 429149360 429458989 \
@@ -255,15 +283,59 @@ uv run python scripts/run_submissions.py 429149360 429458989 \
 
 uv run python scripts/run_submissions.py 429149360 429458989 \
   --headless --seed 42 --races 7
+
+uv run python scripts/run_submissions.py 429149360 429458989 429929224 429859475 \
+  --headless --seed 42 --races 3 --round-seconds 30 --json
 ```
 
 Add `--fullscreen` to start the viewer in fullscreen. Use `--export-dir PATH`
 for another extracted assignment, `--camera follow` to change the view, or
 `--dry-run` to inspect the resolved command without running
-submission code. Controller files load through the existing h2h file-path
-loader, so the two submissions may have the same controller filename.
+submission code. Controller files load through the existing file-path
+loader, so submissions may have the same controller filename.
+
+For side-by-side `follow` cameras, use:
+
+```bash
+uv run python scripts/run_submissions.py 429929224 429859475 \
+  --camera split_follow --fullscreen --seed 110
+```
+
+The challenger stays on the left and the incumbent on the right. Each pane
+follows its team's first car when using multiple copies. Press `v` to cycle
+between this view and the other h2h camera modes; race results and controls stay
+shared across the window. The direct `racing h2h --watch` runner accepts the
+same `--camera split_follow` option.
+
+Watched head-to-head races and heats include a timing tower in the top-left
+corner, with the blue F110 logo, race countdown, positions, and gaps to the
+leader. Click **Timing [L]** or press **L** to hide or show it.
+
+Click a timing row to switch to the close `follow` camera and keep following
+that entrant through position changes and subsequent races. Hiding the tower
+preserves that selection. **AUTO** returns to automatic camera targeting;
+**V** still cycles views, and returning to `follow` retains the selected car.
+
+Gaps compare the current time with the time the leader reached each trailing
+car's scored race distance. Timing resets for each race and does not interpolate
+across marshal recoveries; a dash means there is not enough history for a gap.
 
 ### Racing local controllers
+
+For a heat with local controllers, repeat `--module` four or eight times:
+
+```bash
+uv run racing heat --watch --fullscreen \
+  --module controllers.level_1 --module controllers.level_2 \
+  --module controllers.level_3 --module controllers.crash_fast \
+  --seed 110 --track-seed 2026
+```
+
+Omit `--watch` for a headless heat; add `--json` for machine-readable results.
+Use `--races`, `--round-seconds`, and the same marshal settings as head-to-head
+to configure each heat. If labels need overrides, repeat `--name` once per
+module in module order. Repeat `--fallback-name` once per module to provide labels used
+only when controllers omit `RACING_NAME`.
 
 Use a watched race when you need to understand behavior:
 

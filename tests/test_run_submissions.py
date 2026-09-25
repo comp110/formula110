@@ -273,3 +273,113 @@ def test_submissions_with_identical_controller_names_load_independently(runner: 
 
     assert challenger(RobotSensors()).throttle == 0.25
     assert incumbent(RobotSensors()).throttle == 0.75
+
+
+@pytest.mark.parametrize("headless", [False, True])
+@pytest.mark.parametrize("entrant_count", [4, 8])
+def test_heat_ids_dispatch_with_ordered_submission_labels_and_shared_options(
+    runner: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    headless: bool,
+    entrant_count: int,
+) -> None:
+    identifiers = [str(index * 101) for index in range(1, entrant_count + 1)]
+    controllers = [make_submission(tmp_path, identifier) for identifier in identifiers]
+    dispatched: list[list[str]] = []
+
+    def fixed_random_seed(_bound: int) -> int:
+        return 424242
+
+    monkeypatch.setattr(cli, "main", dispatched.append)
+    monkeypatch.setattr(runner.secrets, "randbelow", fixed_random_seed)
+
+    runner.main(
+        [
+            *identifiers,
+            "--export-dir",
+            str(tmp_path),
+            "--seed",
+            "random",
+            "--track-seed",
+            "110",
+            "--races",
+            "3",
+            "--round-seconds",
+            "0.5",
+            *(["--headless", "--json"] if headless else ["--fullscreen"]),
+        ]
+    )
+
+    assert len(dispatched) == 1
+    args = cli.build_argument_parser().parse_args(dispatched[0])
+    assert args.command == "heat"
+    assert args.module == [str(path) for path in controllers]
+    assert args.fallback_name == [f"#{identifier}" for identifier in identifiers]
+    assert args.name is None
+    assert args.watch is not headless
+    assert args.camera == "three_quarter"
+    assert args.fullscreen is not headless
+    assert args.json is headless
+    assert args.seed == 424242
+    assert args.track_seed == 110
+    assert args.races == 3
+    assert args.round_seconds == 0.5
+    output = capsys.readouterr()
+    assert "Seed: 424242 (reuse with --seed 424242)" in output.err
+    assert f"Entrant {entrant_count} #{identifiers[-1]}:" in output.err
+
+
+@pytest.mark.parametrize("entrant_count", [1, 3, 5, 6, 7, 9])
+def test_wrapper_requires_two_four_or_eight_ids(
+    runner: ModuleType,
+    entrant_count: int,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    identifiers = [str(index * 101) for index in range(1, entrant_count + 1)]
+    with pytest.raises(SystemExit) as error:
+        runner.main(identifiers)
+
+    assert error.value.code == 2
+    assert "provide exactly two IDs for head-to-head or four or eight IDs for a heat" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("entrant_count", [4, 8])
+def test_heat_rejects_duplicate_submission_ids(
+    runner: ModuleType,
+    capsys: pytest.CaptureFixture[str],
+    entrant_count: int,
+) -> None:
+    identifiers = [str(index * 101) for index in range(1, entrant_count)]
+    with pytest.raises(SystemExit) as error:
+        runner.main([*identifiers, "submission_101"])
+
+    assert error.value.code == 2
+    assert f"{entrant_count} distinct submission IDs" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("entrant_count", [4, 8])
+def test_heat_dry_run_resolves_modules_without_importing_them(
+    runner: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    entrant_count: int,
+) -> None:
+    identifiers = [str(index * 101) for index in range(1, entrant_count + 1)]
+    for identifier in identifiers:
+        make_submission(tmp_path, identifier)
+
+    def unexpected_dispatch(_args: list[str]) -> None:
+        pytest.fail("dry-run dispatched the heat")
+
+    monkeypatch.setattr(cli, "main", unexpected_dispatch)
+    runner.main([*identifiers, "--export-dir", str(tmp_path), "--dry-run", "--seed", "42"])
+
+    command = shlex.split(capsys.readouterr().out)
+    assert command[:4] == [sys.executable, "-m", "racing", "heat"]
+    args = cli.build_argument_parser().parse_args(command[3:])
+    assert args.fallback_name == [f"#{identifier}" for identifier in identifiers]
+    assert len(args.module) == entrant_count
+    assert args.seed == 42

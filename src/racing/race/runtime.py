@@ -41,6 +41,7 @@ RACE_GRID_CURVE_DIRECTION_THRESHOLD_DEGREES = 0.5
 RACE_MARSHAL_RESET_LANE_OFFSET_FRACTION = 0.5
 RACE_MARSHAL_RESET_LONGITUDINAL_SPACING_CAR_LENGTHS = 1.5
 RACE_OFF_TRACK_RESET_DISTANCE_M = TRACK_WIDTH / 2 + TRACK_EDGE_BUFFER
+RACE_MARSHAL_CAR_CONTACT_MAX_SPEED_MPS = 3.0 * 0.44704
 RACE_START_FINISH_AHEAD_CAR_LENGTHS = 2.0
 
 
@@ -463,9 +464,11 @@ def _track_projection_is_outside_drivable_surface(projection: TrackProjection) -
 def _race_runtime_is_stuck(runtime: RaceCarRuntime) -> bool:
     if robot_is_eliminated(runtime.robot):
         return False
-    if runtime.contact_state.wall_contact or runtime.contact_state.car_contact:
+    if runtime.contact_state.wall_contact:
         return True
     speed_mps = abs(float(runtime.robot.vehicle.getCurrentSpeedKmHour()) / 3.6)
+    if runtime.contact_state.car_contact and speed_mps <= RACE_MARSHAL_CAR_CONTACT_MAX_SPEED_MPS:
+        return True
     if speed_mps < 0.25:
         return True
     return runtime.recent_progress_mps < 0.04 and speed_mps < 1.20

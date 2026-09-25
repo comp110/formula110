@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from importlib import import_module
 from random import Random
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeVar, cast
 
 from racing.graphics.panda_config import configure_headless_panda
 from racing.graphics.track_rendering import add_racing_scene_collisions
@@ -53,6 +53,7 @@ HEAD_TO_HEAD_RESULT_SCHEMA_VERSION = 1
 
 HeadToHeadRole = Literal["challenger", "incumbent"]
 HeadToHeadOutcome = Literal["challenger", "incumbent", "tie"]
+_RaceEntryT = TypeVar("_RaceEntryT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -497,9 +498,7 @@ def format_head_to_head_result(result: HeadToHeadResult) -> str:
 def format_head_to_head_result_banner(result: HeadToHeadResult) -> str:
     """Format the compact winner and distance summary shown over a finished race."""
     winner_line = (
-        "RESULT: TIE"
-        if result.winner == "tie"
-        else f"WINNER: {_head_to_head_result_role_name(result, result.winner)}"
+        "RESULT: TIE" if result.winner == "tie" else f"WINNER: {_head_to_head_result_role_name(result, result.winner)}"
     )
     return "\n".join(
         (
@@ -969,13 +968,13 @@ def _run_headless_student_runtime_for_duration(
     model: Any,
     physics_world: Any,
     physics_scene: PhysicsScene,
-    entries: tuple[HeadToHeadRaceEntry, ...],
+    entries: tuple[_RaceEntryT, ...],
     controllers: tuple[RobotController, ...],
     runtimes: tuple[RaceCarRuntime, ...],
     duration_seconds: float,
     fixed_delta_seconds: float,
     recovery_config: RaceRecoveryConfig | None,
-    sensor_sample_callback: Callable[[HeadToHeadRaceEntry, RobotSensors], None] | None = None,
+    sensor_sample_callback: Callable[[_RaceEntryT, RobotSensors], None] | None = None,
 ) -> None:
     elapsed_seconds = 0.0
     while elapsed_seconds < duration_seconds:
@@ -1005,12 +1004,12 @@ def _run_headless_student_runtime_step(
     model: Any,
     physics_world: Any,
     physics_scene: PhysicsScene,
-    entries: tuple[HeadToHeadRaceEntry, ...],
+    entries: tuple[_RaceEntryT, ...],
     controllers: tuple[RobotController, ...],
     runtimes: tuple[RaceCarRuntime, ...],
     elapsed_seconds: float,
     fixed_delta_seconds: float,
-    sensor_sample_callback: Callable[[HeadToHeadRaceEntry, RobotSensors], None] | None = None,
+    sensor_sample_callback: Callable[[_RaceEntryT, RobotSensors], None] | None = None,
 ) -> tuple[TrackProjection, ...]:
     if not (len(entries) == len(controllers) == len(runtimes)):
         raise ValueError("entries, controllers, and runtimes must have the same length")

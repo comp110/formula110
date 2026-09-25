@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections.abc import Sequence
+from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 from typing import cast
 
-from racing.game.app import create_app, create_head_to_head_viewer_app
+from racing.game.app import create_app, create_head_to_head_viewer_app, create_heat_viewer_app
 from racing.game.config import (
     DEFAULT_RACE_SECONDS,
     CameraView,
     GameConfig,
     HeadToHeadViewerConfig,
+    HeatViewerConfig,
     RacingAudioConfig,
     parse_color_rgba,
     parse_window_size,
@@ -25,6 +28,14 @@ from racing.graphics.colors import (
     ColorRGBA,
 )
 from racing.race.head_to_head import format_head_to_head_result, run_headless_head_to_head
+from racing.race.heat import (
+    DEFAULT_HEAT_COLORS,
+    HEAT_ENTRANT_COUNTS,
+    HeatEntrant,
+    HeatResult,
+    format_heat_result,
+    run_headless_heat,
+)
 from racing.race.rules import HeadToHeadRaceRules, HeadToHeadScoring
 from racing.race.runtime import DEFAULT_RACE_RANDOM_SEED
 from racing.student.api import StudentControllerSubmission, load_student_submission
@@ -91,6 +102,23 @@ def _team_color_from_args(args: argparse.Namespace) -> ColorRGBA:
     return cast(ColorRGBA, getattr(args, "team_color", DEFAULT_FORMULA_TEAM_COLOR))
 
 
+def _add_race_rule_arguments(parser: argparse.ArgumentParser, *, include_scoring: bool = True) -> None:
+    if include_scoring:
+        parser.add_argument("--win-margin-m", type=float, default=1.0, help="distance margin required for a win")
+        parser.add_argument(
+            "--scoring",
+            choices=("team-sum", "best-copy"),
+            default="team-sum",
+            help="distance metric used to classify each race",
+        )
+    else:
+        parser.set_defaults(scoring="team-sum", win_margin_m=1.0)
+    parser.add_argument("--no-marshal", action="store_true", help="disable stuck-car marshal recovery")
+    parser.add_argument("--marshal-stuck-seconds", type=float, default=1.5)
+    parser.add_argument("--marshal-penalty-m", type=float, default=5.0)
+    parser.add_argument("--marshal-cooldown-seconds", type=float, default=2.0)
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     """Create the parser used by the ``racing`` terminal command."""
     parser = argparse.ArgumentParser(description="Run the Racing simulator.")
@@ -128,7 +156,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--camera",
-        choices=tuple(view.value for view in CameraView),
+        choices=tuple(view.value for view in CameraView if view is not CameraView.SPLIT_FOLLOW),
         default=CameraView.DRONE.value,
         help="initial playable camera view; press v in-game to cycle",
     )
@@ -202,17 +230,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="seed for deterministic random starting positions",
     )
     _add_track_arguments(h2h_parser, suppress_defaults=True)
-    h2h_parser.add_argument("--win-margin-m", type=float, default=1.0, help="distance margin required for a win")
-    h2h_parser.add_argument(
-        "--scoring",
-        choices=("team-sum", "best-copy"),
-        default="team-sum",
-        help="distance metric used to classify each race",
-    )
-    h2h_parser.add_argument("--no-marshal", action="store_true", help="disable stuck-car marshal recovery")
-    h2h_parser.add_argument("--marshal-stuck-seconds", type=float, default=1.5)
-    h2h_parser.add_argument("--marshal-penalty-m", type=float, default=5.0)
-    h2h_parser.add_argument("--marshal-cooldown-seconds", type=float, default=2.0)
+    _add_race_rule_arguments(h2h_parser)
     h2h_parser.add_argument("--watch", action="store_true", help="open the graphical race viewer")
     h2h_parser.add_argument(
         "--json",
@@ -239,6 +257,46 @@ def build_argument_parser() -> argparse.ArgumentParser:
         type=parse_color_rgba,
         default=DEFAULT_INCUMBENT_TEAM_COLOR,
         help="incumbent formula car paint color",
+    )
+
+    heat_parser = subparsers.add_parser("heat", help="race four or eight student controllers on one shared grid")
+    heat_parser.add_argument(
+        "--module",
+        action="append",
+        required=True,
+        metavar="MODULE",
+        help="controller file or module; repeat exactly four or eight times in entrant order",
+    )
+    heat_parser.add_argument(
+        "--name",
+        action="append",
+        metavar="NAME",
+        help="override controller names; repeat once per module in entrant order",
+    )
+    heat_parser.add_argument(
+        "--fallback-name",
+        action="append",
+        metavar="NAME",
+        help="labels for controllers without RACING_NAME; repeat once per module in entrant order",
+    )
+    heat_parser.add_argument("--control-function", default=argparse.SUPPRESS)
+    heat_parser.add_argument("--fixed-delta-seconds", type=float, default=argparse.SUPPRESS)
+    heat_parser.add_argument("--races", type=int, default=1, help="number of heat races to run")
+    heat_parser.add_argument("--round-seconds", type=float, default=DEFAULT_RACE_SECONDS)
+    heat_parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
+    _add_track_arguments(heat_parser, suppress_defaults=True)
+    _add_race_rule_arguments(heat_parser, include_scoring=False)
+    _add_audio_arguments(heat_parser)
+    heat_parser.add_argument("--watch", action="store_true", help="open the graphical heat viewer")
+    heat_parser.add_argument("--json", action="store_true", help="print machine-readable results (headless only)")
+    heat_parser.add_argument("--window-type", choices=("offscreen",), default=None)
+    heat_parser.add_argument("--fullscreen", action="store_true", help="start the watched heat in fullscreen")
+    heat_parser.add_argument("--size", type=parse_window_size, default=(1280, 720))
+    heat_parser.add_argument(
+        "--camera",
+        choices=tuple(view.value for view in CameraView if view is not CameraView.SPLIT_FOLLOW),
+        default=CameraView.THREE_QUARTER.value,
+        help="shared heat camera; split_follow is only supported by h2h",
     )
     return parser
 
@@ -313,12 +371,94 @@ def _resolve_h2h_copy_counts(
     return resolved_challenger_copies, resolved_incumbent_copies
 
 
+def _run_heat_from_args(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    *,
+    track_id: str,
+    track_seed: int | None,
+) -> HeatResult | None:
+    modules = cast(list[str], args.module)
+    if len(modules) not in HEAT_ENTRANT_COUNTS:
+        parser.error("heat requires exactly four or eight --module arguments")
+    names = cast(list[str] | None, args.name)
+    fallback_names = cast(list[str] | None, args.fallback_name)
+    for flag, values in (("--name", names), ("--fallback-name", fallback_names)):
+        if values is not None and len(values) != len(modules):
+            parser.error(f"{flag} must be repeated {len(modules)} times in entrant order")
+    if bool(args.watch) and bool(args.json):
+        parser.error("--json is only available for headless heats")
+    rules = _head_to_head_rules_from_args(args)
+    entrants: list[HeatEntrant] = []
+    for index, module in enumerate(modules):
+        role = f"entrant {index + 1}"
+        submission = _load_submission_from_args(
+            parser=parser,
+            student_module=module,
+            function_name=str(args.control_function),
+            role=role,
+        )
+        entrants.append(
+            HeatEntrant(
+                name=_student_submission_name(
+                    submission,
+                    role,
+                    None if names is None else names[index],
+                    fallback=None if fallback_names is None else fallback_names[index],
+                ),
+                controller=submission.controller,
+                team_color=_student_submission_color(submission, DEFAULT_HEAT_COLORS[index]),
+            )
+        )
+    if bool(args.watch):
+        create_heat_viewer_app(
+            HeatViewerConfig(
+                entrants=tuple(entrants),
+                size=cast(tuple[int, int], args.size),
+                fullscreen=bool(args.fullscreen),
+                camera_view=CameraView(str(args.camera)),
+                race_count=int(args.races),
+                round_seconds=float(args.round_seconds),
+                fixed_delta_seconds=float(args.fixed_delta_seconds),
+                random_seed=int(args.seed),
+                track_id=track_id,
+                track_seed=track_seed,
+                rules=rules,
+                window_type=cast(str | None, args.window_type),
+                audio=_audio_config_from_args(args),
+            )
+        ).run()
+        return
+    return run_headless_heat(
+        entrants=tuple(entrants),
+        race_count=int(args.races),
+        round_seconds=float(args.round_seconds),
+        fixed_delta_seconds=float(args.fixed_delta_seconds),
+        random_seed=int(args.seed),
+        track_id=track_id,
+        track_seed=track_seed,
+        rules=rules,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Run the command-line entry point."""
     parser = build_argument_parser()
     args = parser.parse_args(argv)
     human_recording_path = cast(Path | None, args.record_human)
     track_id, track_seed = _track_selection_from_args(parser=parser, args=args)
+
+    if getattr(args, "command", None) == "heat":
+        if human_recording_path is not None:
+            parser.error("--record-human is only available in single-car manual mode")
+        with redirect_stdout(sys.stderr) if bool(args.json) else nullcontext():
+            result = _run_heat_from_args(parser, args, track_id=track_id, track_seed=track_seed)
+        if result is not None:
+            if bool(args.json):
+                print(json.dumps(result.to_dict(), indent=2, sort_keys=True, allow_nan=False))
+            else:
+                print(format_heat_result(result))
+        return
 
     if getattr(args, "command", None) == "h2h":
         if human_recording_path is not None:

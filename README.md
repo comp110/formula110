@@ -320,6 +320,46 @@ Gaps compare the current time with the time the leader reached each trailing
 car's scored race distance. Timing resets for each race and does not interpolate
 across marshal recoveries; a dash means there is not enough history for a gap.
 
+### Selecting heats from leaderboard results
+
+Print one eight-car heat command for each category in an extracted Gradescope
+assignment's `submission_metadata.yml`:
+
+```bash
+uv run python scripts/leaderboard_heats.py
+```
+
+Each command is preceded by the selected cars and their scores. Copy a command
+to run that group. The script only prints commands; it does not launch races.
+Car labels use submitters' first and last initials from the submission metadata:
+`KJ` for Kris Jordan, or `KJ+MJ` for a team with Kris Jordan and Morgan Jordan.
+The printed rankings include submission IDs to distinguish matching initials.
+
+Use `--metric` repeatedly to select categories by name or unique substring.
+Put race options after `--` to include them in every generated command:
+
+```bash
+uv run python scripts/leaderboard_heats.py \
+  --metric "hits different" --metric "clock it" --metric "g's going crazy" \
+  -- --fullscreen --seed 110 --races 3
+
+uv run python scripts/leaderboard_heats.py --export-dir /path/to/assignment_export --list
+```
+
+Categories and ranking directions come from the exported leaderboard entries:
+`order: asc` selects the lowest scores; `desc` or an omitted order selects the
+highest. Only current results are used, never submission history. Missing,
+`N/A`, and nonfinite scores are excluded, as are submissions whose selected
+controller files cannot be found. Ties are broken by ascending submission ID.
+Middle names are ignored when forming initials; a single-word name uses its
+first two letters. Missing submitter names fall back to the submission ID.
+Generating commands does not import student code.
+
+If fewer than eight eligible cars remain, the script reports the shortfall and
+skips that category's command. Use `--cars 4` for four-car heats, or `--list` to
+see available categories, directions, and eligible counts. The output uses
+shell comments for annotations, so it can also be saved as a shell script.
+
 ### Racing local controllers
 
 For a heat with local controllers, repeat `--module` four or eight times:

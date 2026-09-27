@@ -99,7 +99,8 @@ def test_selected_heat_car_stays_followed_when_rank_changes_and_auto_restores_le
 def test_selected_identity_resolves_new_runtime_slot_after_race_shuffle(count: int) -> None:
     config = _heat_config(count)
     first_entries = heat_race_entries(entrant_count=count, race_index=1, random_seed=110)
-    next_entries = heat_race_entries(entrant_count=count, race_index=2, random_seed=110)
+    # Identity-based camera selection also survives a caller-provided grid reorder.
+    next_entries = tuple(reversed(first_entries))
     runtimes = tuple(_runtime(index * 10.0) for index in range(count))
     changed_slot = next(index for index in range(count) if first_entries[index] != next_entries[index])
     selected_entry = first_entries[changed_slot]

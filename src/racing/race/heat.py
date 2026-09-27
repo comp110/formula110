@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from importlib import import_module
 from math import isclose
-from random import Random
 from typing import Any, cast
 
 from racing.graphics.colors import UNC_CAROLINA_BLUE, ColorRGBA
@@ -55,7 +54,7 @@ class HeatEntrant:
 
 @dataclass(frozen=True, slots=True)
 class HeatRaceEntry:
-    """Stable entrant identity assigned to one shuffled starting-grid slot."""
+    """Stable entrant identity assigned to its input-order starting-grid slot."""
 
     entrant_index: int
 
@@ -199,14 +198,12 @@ def validate_heat_entrants(entrants: tuple[HeatEntrant, ...]) -> None:
 def heat_race_entries(
     *, entrant_count: int, race_index: int, random_seed: int = DEFAULT_RACE_RANDOM_SEED
 ) -> tuple[HeatRaceEntry, ...]:
-    """Shuffle stable entrant identities with the head-to-head grid seed formula."""
+    """Keep entrants in input order for every heat, independent of the spawn seed."""
     if entrant_count not in HEAT_ENTRANT_COUNTS:
         raise ValueError("a heat requires exactly four or eight entrants")
     if race_index < 1:
         raise ValueError("race_index must be at least one")
-    entries = [HeatRaceEntry(entrant_index=index) for index in range(entrant_count)]
-    Random(random_seed + race_index * 131_071 + 9_173).shuffle(entries)
-    return tuple(entries)
+    return tuple(HeatRaceEntry(entrant_index=index) for index in range(entrant_count))
 
 
 def heat_race_result_from_runtimes(
@@ -255,11 +252,12 @@ def format_heat_result(result: HeatResult) -> str:
 
 
 def format_heat_result_banner(result: HeatResult) -> str:
-    """Format a compact final ranking for the race viewer."""
+    """Show final rankings and summed damage percentages across all races."""
     return "\n".join(
         ["HEAT RESULTS"]
         + [
             f"{place}. {_banner_name(standing.name)}  {standing.distance_m:.1f} m"
+            f"  |  {standing.damage * result.race_count * 100.0:.1f}% total damage"
             for place, standing in _placed_standings(result.standings)
         ]
     )
@@ -336,7 +334,9 @@ def _run_headless_heat_race(
     try:
         add_racing_scene_collisions(physics_world=physics_world, render=root, samples=samples)
         entries = heat_race_entries(entrant_count=len(entrants), race_index=race_index, random_seed=random_seed)
-        spawn_poses = race_spawn_poses(len(entries), model=model, random_seed=random_seed, race_index=race_index)
+        spawn_poses = race_spawn_poses(
+            len(entries), model=model, random_seed=random_seed, race_index=race_index, shuffle_grid=False
+        )
         controllers = tuple(controller_for_copy(entrants[entry.entrant_index].controller) for entry in entries)
         runtimes: list[RaceCarRuntime] = []
         for entry, pose in zip(entries, spawn_poses, strict=True):

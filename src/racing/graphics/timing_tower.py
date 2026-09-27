@@ -11,7 +11,7 @@ from typing import Any, cast
 
 from racing.graphics.colors import ColorRGBA
 
-TOWER_WIDTH = 0.76
+TOWER_WIDTH = 0.54
 TOWER_HEADER_HEIGHT = 0.14
 TOWER_CLOCK_HEIGHT = 0.085
 TOWER_ROW_HEIGHT = 0.084
@@ -95,18 +95,18 @@ class TimingTower:
         self._card(self._panel, "header", 0.0, 0.0, TOWER_WIDTH, TOWER_HEADER_HEIGHT, (1.0, 1.0, 1.0, 1.0))
         self._add_logo(logo_path)
 
-        self._toggle = self._button(self._root, 0.245, 0.066, self._toggle_visible)
+        self._toggle = self._button(self._root, 0.22, 0.066, self._toggle_visible)
         self._toggle_background = self._card(
-            self._toggle, "toggle-background", 0.0, 0.0, 0.245, 0.066, (1.0, 1.0, 1.0, 1.0)
+            self._toggle, "toggle-background", 0.0, 0.0, 0.22, 0.066, (1.0, 1.0, 1.0, 1.0)
         )
-        self._text(self._toggle, "Timing [L]", 0.1225, -0.044, 0.031, (0.14, 0.22, 0.29, 1.0), align="center")
+        self._text(self._toggle, "Timing [L]", 0.11, -0.044, 0.029, (0.14, 0.22, 0.29, 1.0), align="center")
 
         self._card(self._panel, "clock-background", 0.0, -TOWER_HEADER_HEIGHT, TOWER_WIDTH, TOWER_CLOCK_HEIGHT, _DARK)
-        self._clock = self._text(self._panel, "00:00", 0.034, -0.196, 0.045, _WHITE)
-        self._race_label = self._text(self._panel, "RACE 1/1", 0.382, -0.194, 0.027, _MUTED, align="center")
-        self._auto = self._button(self._panel, 0.145, TOWER_CLOCK_HEIGHT, lambda: self._on_select(None))
-        self._auto.setPos(*self._position(TOWER_WIDTH - 0.16, -TOWER_HEADER_HEIGHT))
-        self._auto_text = self._text(self._auto, "AUTO", 0.12, -0.054, 0.028, _BLUE, align="right")
+        self._clock = self._text(self._panel, "00:00", 0.022, -0.196, 0.042, _WHITE)
+        self._race_label = self._text(self._panel, "RACE 1/1", 0.275, -0.194, 0.027, _MUTED, align="center")
+        self._auto = self._button(self._panel, 0.12, TOWER_CLOCK_HEIGHT, lambda: self._on_select(None))
+        self._auto.setPos(*self._position(TOWER_WIDTH - 0.13, -TOWER_HEADER_HEIGHT))
+        self._auto_text = self._text(self._auto, "AUTO", 0.105, -0.054, 0.027, _BLUE, align="right")
         self._update_layout()
 
     @property
@@ -172,7 +172,7 @@ class TimingTower:
             widgets.background.setColor(*background)
             widgets.stripe.setColor(*row.color)
             self._set_text(widgets.rank, str(row.rank))
-            self._set_text(widgets.name, self._fit_name(row.name, widgets.name.node(), 0.39, 0.034))
+            self._set_text(widgets.name, self._fit_name(row.name, widgets.name.node(), TOWER_WIDTH - 0.30, 0.034))
             self._set_text(widgets.gap, format_timing_gap(row))
             color = _MUTED if row.eliminated else _WHITE
             widgets.rank.node().setTextColor(*color)
@@ -199,7 +199,7 @@ class TimingTower:
     def _create_row(self, car_id: str) -> _RowWidgets:
         button = self._button(self._panel, TOWER_WIDTH, TOWER_ROW_HEIGHT, lambda: self._on_select(car_id))
         background = self._card(button, "row-background", 0.0, 0.0, TOWER_WIDTH, TOWER_ROW_HEIGHT, _DARK)
-        stripe = self._card(button, "team-stripe", 0.105, -0.019, 0.008, 0.046, _BLUE, bin_order=510)
+        stripe = self._card(button, "team-stripe", 0.075, -0.019, 0.008, 0.046, _BLUE, bin_order=510)
         self._card(
             button,
             "row-divider",
@@ -210,8 +210,8 @@ class TimingTower:
             (0.2, 0.23, 0.28, 0.5),
             bin_order=510,
         )
-        rank = self._text(button, "", 0.048, -0.055, 0.036, _WHITE, align="center")
-        name = self._text(button, "", 0.135, -0.053, 0.034, _WHITE)
+        rank = self._text(button, "", 0.035, -0.055, 0.036, _WHITE, align="center")
+        name = self._text(button, "", 0.102, -0.053, 0.034, _WHITE)
         gap = self._text(button, "", TOWER_WIDTH - 0.026, -0.053, 0.032, _WHITE, align="right")
         return _RowWidgets(button, background, stripe, rank, name, gap)
 
@@ -234,7 +234,7 @@ class TimingTower:
         if texture is None:
             self._text(self._panel, "F110", 0.035, -0.095, 0.095, _BLUE)
             return
-        width = 0.365
+        width = 0.23
         height = width * int(texture.getYSize()) / max(1, int(texture.getXSize()))
         logo = self._card(
             self._panel,
@@ -335,7 +335,7 @@ class TimingTower:
         self._root.setPos(*self._position(-aspect + 0.055, 0.95))
         self._root.setScale(max(0.1, scale))
         self._toggle.setPos(
-            *self._position(TOWER_WIDTH - 0.26, -0.037) if self._visible else self._position(0.0, -0.22)
+            *self._position(TOWER_WIDTH - 0.235, -0.037) if self._visible else self._position(0.0, -0.22)
         )
 
     @staticmethod

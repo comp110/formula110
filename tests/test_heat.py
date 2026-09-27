@@ -7,7 +7,6 @@ from typing import cast
 import pytest
 
 from racing import RobotCommand, RobotSensors
-from racing.race.head_to_head import head_to_head_race_entries
 from racing.race.heat import (
     DEFAULT_HEAT_COLORS,
     HeatEntrant,
@@ -54,23 +53,12 @@ def test_heat_requires_four_or_eight_entrants_before_starting_physics(count: int
 
 @pytest.mark.parametrize("race_index", [1, 2, 3])
 @pytest.mark.parametrize("entrant_count", [4, 8])
-def test_heat_grid_shuffle_is_reproducible_and_preserves_individual_identity(
-    race_index: int, entrant_count: int
-) -> None:
+def test_heat_grid_preserves_input_order_and_individual_identity(race_index: int, entrant_count: int) -> None:
     arguments = {"entrant_count": entrant_count, "race_index": race_index, "random_seed": 781}
     entries = heat_race_entries(**arguments)
-    h2h_entries = head_to_head_race_entries(
-        race_index=race_index,
-        random_seed=781,
-        challenger_copies=entrant_count // 2,
-        incumbent_copies=entrant_count // 2,
-    )
-
     assert entries == heat_race_entries(**arguments)
-    assert sorted(entry.entrant_index for entry in entries) == list(range(entrant_count))
-    assert [entry.entrant_index for entry in entries] == [
-        entry.copy_index + (0 if entry.role == "challenger" else entrant_count // 2) for entry in h2h_entries
-    ]
+    assert entries == heat_race_entries(entrant_count=entrant_count, race_index=race_index, random_seed=42)
+    assert [entry.entrant_index for entry in entries] == list(range(entrant_count))
     assert {entry.role for entry in entries} == {f"heat-{index}" for index in range(entrant_count)}
     assert all(entry.copy_index == 0 for entry in entries)
 
@@ -166,10 +154,10 @@ def test_heat_tied_totals_share_first_place_without_arbitrary_winner() -> None:
     assert result.winner_index is None
     assert format_heat_result_banner(result).splitlines() == [
         "HEAT RESULTS",
-        "1. Alpha  20.0 m",
-        "1. Beta  20.0 m",
-        "3. Gamma  15.0 m",
-        "4. Delta  10.0 m",
+        "1. Alpha  20.0 m  |  10.0% total damage",
+        "1. Beta  20.0 m  |  10.0% total damage",
+        "3. Gamma  15.0 m  |  10.0% total damage",
+        "4. Delta  10.0 m  |  10.0% total damage",
     ]
 
 
@@ -185,6 +173,18 @@ def test_heat_banner_shortens_names_without_changing_terminal_or_json_names() ->
     assert "…" in banner
     assert long_name in format_heat_result(result)
     assert result.to_dict()["entrant_names"] == list(names)
+
+
+def test_heat_banner_sums_damage_across_races_instead_of_showing_the_average() -> None:
+    names = ("KJ", "MJ", "AB", "CD")
+    result = HeatResult(
+        entrant_names=names,
+        round_seconds=30.0,
+        races=(_race(1, (40.0, 30.0, 20.0, 10.0), names=names), _race(2, (40.0, 30.0, 20.0, 10.0), names=names)),
+    )
+
+    assert result.standings[0].damage == pytest.approx(0.15)
+    assert "KJ  80.0 m  |  30.0% total damage" in format_heat_result_banner(result)
 
 
 @pytest.mark.parametrize("entrant_count", [4, 8])

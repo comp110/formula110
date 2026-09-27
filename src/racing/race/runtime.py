@@ -105,8 +105,9 @@ def race_spawn_poses(
     config: VehiclePhysicsConfig = FORMULA_VEHICLE_PHYSICS_CONFIG,
     random_seed: int = DEFAULT_RACE_RANDOM_SEED,
     race_index: int = 1,
+    shuffle_grid: bool = True,
 ) -> tuple[RaceSpawnPose, ...]:
-    """Create repeatable starting grid poses for one race."""
+    """Create seeded grid poses, optionally ordered from pole to the back."""
     if car_count < 1:
         raise ValueError("car_count must be at least one")
     if race_index < 1:
@@ -142,7 +143,8 @@ def race_spawn_poses(
         )
         for slot_index in range(car_count)
     ]
-    rng.shuffle(grid_slots)
+    if shuffle_grid:
+        rng.shuffle(grid_slots)
     return tuple(
         _race_spawn_pose_at_grid_slot(
             track_pose=track_pose_at_distance(model, progress_distance_m),

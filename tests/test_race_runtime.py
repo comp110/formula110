@@ -65,6 +65,25 @@ def test_single_car_spawn_position_is_deterministic_for_seed() -> None:
     assert first.progress_distance_m != different.progress_distance_m
 
 
+@pytest.mark.parametrize("car_count", [4, 8])
+@pytest.mark.parametrize("seed", [1, 110, 271])
+@pytest.mark.parametrize("race_index", [1, 2])
+def test_ordered_grid_runs_from_pole_to_back_across_track_wrap(car_count: int, seed: int, race_index: int) -> None:
+    # Allow the entire eight-car grid to fit before the start line.
+    model = build_track_progress_model(
+        tuple(TrackPoint(point.x * 4, point.z * 4) for point in square_track_model_points())
+    )
+    poses = race_spawn_poses(car_count, model=model, random_seed=seed, race_index=race_index, shuffle_grid=False)
+    start_finish = seeded_race_start_finish_pose(model=model, random_seed=seed, race_index=race_index)
+    distances_to_line = [
+        (start_finish.progress_distance_m - pose.progress_distance_m) % model.total_length_m for pose in poses
+    ]
+
+    assert distances_to_line == sorted(distances_to_line)
+    assert len(set(distances_to_line)) == car_count
+    assert set(poses) == set(race_spawn_poses(car_count, model=model, random_seed=seed, race_index=race_index))
+
+
 def test_seeded_start_finish_pose_matches_front_spawn_progress() -> None:
     model = build_track_progress_model(square_track_model_points())
     spawn_pose = race_spawn_poses(

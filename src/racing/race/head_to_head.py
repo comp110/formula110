@@ -496,17 +496,19 @@ def format_head_to_head_result(result: HeadToHeadResult) -> str:
 
 
 def format_head_to_head_result_banner(result: HeadToHeadResult) -> str:
-    """Format the compact winner and distance summary shown over a finished race."""
+    """Show the winner, distance, and summed damage across team cars and races."""
     winner_line = (
         "RESULT: TIE" if result.winner == "tie" else f"WINNER: {_head_to_head_result_role_name(result, result.winner)}"
     )
-    return "\n".join(
-        (
-            winner_line,
-            f"{result.challenger_name}: {_format_distance_m(_aggregate_role_scored_distance_m(result, 'challenger'))}",
-            f"{result.incumbent_name}: {_format_distance_m(_aggregate_role_scored_distance_m(result, 'incumbent'))}",
+    lines = [winner_line]
+    for role in ("challenger", "incumbent"):
+        damage = sum(sum(_head_to_head_race_team_stats(race, role).damages) for race in result.races)
+        lines.append(
+            f"{_head_to_head_result_role_name(result, role)}: "
+            f"{_format_distance_m(_aggregate_role_scored_distance_m(result, role))}"
+            f"  |  {damage * 100.0:.1f}% total damage"
         )
-    )
+    return "\n".join(lines)
 
 
 def _head_to_head_winner_line(result: HeadToHeadResult) -> str:

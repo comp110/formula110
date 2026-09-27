@@ -261,6 +261,8 @@ uv run python scripts/run_submissions.py \
 ```
 
 Each submission controls one car, with its own `RACING_NAME` and `RACING_COLOR`.
+Four- and eight-car heats start in CLI order: the first ID takes pole, followed
+by the remaining IDs from front to back. This order is preserved across races.
 Missing names fall back to submission IDs, and missing colors receive distinct
 default paints. A heat runs all its controllers together and ranks their race
 progress. With `--races`, standings use total scored distance across those races.
@@ -272,10 +274,10 @@ affected car is moving at 3 mph or less. Faster contact does not add stuck time;
 wall-contact, stationary-car, and off-track recovery still apply.
 
 Use `--seed random` to choose a new seed; the script prints it so you can replay
-the matchup with `--seed INTEGER`. This seed changes the starting position and
-grid order. Use `--track-seed INTEGER` to generate a reproducible procedural
-track. Other `racing h2h` or `racing heat` options pass through when placed after
-the IDs:
+the matchup with `--seed INTEGER`. This seed changes the starting position;
+two-car head-to-head races also shuffle grid order. Use `--track-seed INTEGER`
+to generate a reproducible procedural track. Other `racing h2h` or `racing heat`
+options pass through when placed after the IDs:
 
 ```bash
 uv run python scripts/run_submissions.py 429149360 429458989 \
@@ -310,6 +312,12 @@ same `--camera split_follow` option.
 Watched head-to-head races and heats include a timing tower in the top-left
 corner, with the blue F110 logo, race countdown, positions, and gaps to the
 leader. Click **Timing [L]** or press **L** to hide or show it.
+Floating car badges show `P1`, `P2`, and so on using the same cumulative scored
+distance as the tower, including completed laps. Badges disappear when a car
+retires from damage and return when the car starts a new race.
+The bottom damage bars are hidden in watched races. Final results include total
+damage, summed across races (and across copies in a head-to-head team), so a
+multi-race total can exceed 100%.
 
 Click a timing row to switch to the close `follow` camera and keep following
 that entrant through position changes and subsequent races. Hiding the tower
@@ -329,8 +337,10 @@ assignment's `submission_metadata.yml`:
 uv run python scripts/leaderboard_heats.py
 ```
 
-Each command is preceded by the selected cars and their scores. Copy a command
-to run that group. The script only prints commands; it does not launch races.
+Each command lists cars from best to worst for that category, placing its top
+qualifier in pole position. It is preceded by the selected cars and their scores.
+Copy a command to run that group. The script only prints commands; it does not
+launch races.
 Car labels use submitters' first and last initials from the submission metadata:
 `KJ` for Kris Jordan, or `KJ+MJ` for a team with Kris Jordan and Morgan Jordan.
 The printed rankings include submission IDs to distinguish matching initials.

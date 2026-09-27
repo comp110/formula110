@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from itertools import combinations
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
 
@@ -9,17 +10,20 @@ import pytest
 
 from racing.game import app
 from racing.game.app import (
+    HeadToHeadCarLabel,
     _head_to_head_car_label,  # pyright: ignore[reportPrivateUsage]
     _head_to_head_car_paint_color,  # pyright: ignore[reportPrivateUsage]
     _head_to_head_viewer_controller,  # pyright: ignore[reportPrivateUsage]
     _head_to_head_viewer_controllers,  # pyright: ignore[reportPrivateUsage]
     _head_to_head_viewer_keyboard_controlled,  # pyright: ignore[reportPrivateUsage]
     _race_viewer_entries,  # pyright: ignore[reportPrivateUsage]
+    _update_head_to_head_car_labels,  # pyright: ignore[reportPrivateUsage]
     create_heat_viewer_app,
     damage_hud_layout,
 )
 from racing.game.config import CameraView, HeatViewerConfig
 from racing.race.heat import DEFAULT_HEAT_COLORS, HeatEntrant, HeatRaceEntry
+from racing.race.runtime import RaceCarRuntime
 from racing.student.api import RobotCommand, RobotController, RobotSensors, load_student_controller
 
 
@@ -35,7 +39,7 @@ def _heat_entrants(entrant_count: int = 4) -> tuple[HeatEntrant, ...]:
 
 
 @pytest.mark.parametrize("entrant_count", [4, 8])
-def test_heat_viewer_shuffles_grid_without_changing_entrant_identity_or_metadata(entrant_count: int) -> None:
+def test_heat_viewer_preserves_grid_order_and_entrant_metadata(entrant_count: int) -> None:
     config = HeatViewerConfig(entrants=_heat_entrants(entrant_count), random_seed=110)
     orders: set[tuple[int, ...]] = set()
 
@@ -51,11 +55,33 @@ def test_heat_viewer_shuffles_grid_without_changing_entrant_identity_or_metadata
             assert _head_to_head_car_label(config=config, entry=entry) == entrant.name
             assert _head_to_head_car_paint_color(config=config, entry=entry) == entrant.team_color
             assert not _head_to_head_viewer_keyboard_controlled(config=config, entry=entry)
-        assert sorted(entrant_indices) == list(range(entrant_count))
+        assert entrant_indices == list(range(entrant_count))
         assert _race_viewer_entries(config=config, race_index=race_index) == entries
         orders.add(tuple(entrant_indices))
 
-    assert len(orders) > 1
+    assert orders == {tuple(range(entrant_count))}
+
+
+def test_retired_car_badge_hides_without_projection_and_returns_after_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    background, text = Mock(), Mock()
+    text.node.return_value.calcWidth.return_value = 5.0
+    robot = SimpleNamespace(eliminated=True)
+    runtime = cast(RaceCarRuntime, SimpleNamespace(robot=robot, label=HeadToHeadCarLabel(background, text)))
+    project = Mock(return_value=(0.0, 0.0))
+    monkeypatch.setattr(app, "_head_to_head_car_label_screen_position", project)
+
+    _update_head_to_head_car_labels(ursina=Mock(), view=CameraView.THREE_QUARTER, runtimes=(runtime,))
+    project.assert_not_called()
+    background.hide.assert_called_once()
+    text.hide.assert_called_once()
+    background.show.assert_not_called()
+    text.show.assert_not_called()
+
+    robot.eliminated = False
+    _update_head_to_head_car_labels(ursina=Mock(), view=CameraView.THREE_QUARTER, runtimes=(runtime,))
+    project.assert_called_once()
+    background.show.assert_called_once()
+    text.show.assert_called_once()
 
 
 @pytest.mark.parametrize("entrant_count", [4, 8])

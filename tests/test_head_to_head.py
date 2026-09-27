@@ -252,7 +252,9 @@ def test_format_head_to_head_result_banner_names_winner_and_distances() -> None:
 
     banner = format_head_to_head_result_banner(result)
 
-    assert banner == "WINNER: candidate\ncandidate: 18.2 m\nbaseline: 12.8 m"
+    assert banner == (
+        "WINNER: candidate\ncandidate: 18.2 m  |  0.0% total damage\nbaseline: 12.8 m  |  0.0% total damage"
+    )
 
 
 def test_head_to_head_result_has_versioned_json_compatible_record() -> None:

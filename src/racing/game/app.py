@@ -139,7 +139,7 @@ DAMAGE_HUD_ROW_SPACING = 0.150
 DAMAGE_HUD_EMPTY_WIDTH = 0.004
 DAMAGE_HUD_LABEL_OFFSET_Y = 0.082
 DAMAGE_HUD_LABEL_SCALE = 0.045
-HEAD_TO_HEAD_CAR_LABEL_BACKGROUND_ALPHA = 0.5
+HEAD_TO_HEAD_CAR_LABEL_BACKGROUND_ALPHA = 0.45
 DAMAGE_HUD_SHADOW_COLOR = (0.0, 0.0, 0.0, 0.62)
 DAMAGE_HUD_TRACK_COLOR = (0.020, 0.023, 0.030, 0.92)
 DAMAGE_HUD_FRAME_COLOR = (0.92, 0.94, 0.98, 0.80)
@@ -651,6 +651,7 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
         config=FORMULA_VEHICLE_PHYSICS_CONFIG,
         random_seed=config.random_seed,
         race_index=1,
+        shuffle_grid=not isinstance(config, HeatViewerConfig),
     )
     runtimes: list[RaceCarRuntime] = []
     for index, (entry, spawn_pose) in enumerate(zip(entries, spawn_poses, strict=True)):
@@ -713,7 +714,7 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
         parent=hud_parent,
         name="head-to-head-result-background",
         position=(0.0, 0.14),
-        scale=(2.5, 0.76) if isinstance(config, HeatViewerConfig) else (1.72, 0.48),
+        scale=(2.5, 0.76) if isinstance(config, HeatViewerConfig) else (2.5, 0.48),
         color=(0.020, 0.023, 0.030, 0.94),
         bin_order=110,
     )
@@ -722,7 +723,7 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
         name="head-to-head-result",
         text="",
         position=(0.0, 0.38) if isinstance(config, HeatViewerConfig) else (0.0, 0.24),
-        scale=0.070 if isinstance(config, HeatViewerConfig) else 0.086,
+        scale=0.070,
         color=(1.0, 1.0, 1.0, 1.0),
         bin_order=111,
     )
@@ -737,6 +738,13 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
         config=config,
         entries=entries,
     )
+    damage_hud_root = hud_parent.attachNewNode("race-damage-hud")
+    for bar in damage_bars:
+        for node in (bar.shadow, bar.frame, bar.track, bar.fill, bar.cap, bar.accent, bar.label):
+            if node is not None:
+                node.reparentTo(damage_hud_root)
+    damage_hud_root.hide()
+    app.racing_damage_hud = damage_hud_root
     audio_runtime = create_racing_audio_runtime(ursina=ursina, config=config.audio)
     _register_audio_vehicles(audio_runtime=audio_runtime, robots=tuple(runtime.robot for runtime in runtimes))
     audio_control = _add_audio_hud_control(ursina=ursina, audio_runtime=audio_runtime)
@@ -871,8 +879,6 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
             )
             _update_head_to_head_car_labels(ursina=ursina, view=camera_rig.view, runtimes=tuple(runtimes))
 
-    update_view(0.0)
-
     race_index = 1
     race_elapsed_seconds = 0.0
     simulation_accumulator_seconds = 0.0
@@ -900,6 +906,12 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
 
     def update_timing_hud() -> None:
         entries_by_id = {_race_viewer_car_id(entry): entry for entry in entries}
+        runtimes_by_id = {_race_viewer_car_id(entry): runtime for entry, runtime in zip(entries, runtimes, strict=True)}
+        for standing in race_timing.rows:
+            label = runtimes_by_id[standing.car_id].label
+            if isinstance(label, HeadToHeadCarLabel):
+                name = _head_to_head_car_label(config=config, entry=entries_by_id[standing.car_id])
+                _set_panda2d_hud_text(label.text, f"P{standing.rank} {name}")
         timing_tower.update(
             rows=tuple(
                 TimingTowerRow(
@@ -925,6 +937,7 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
 
     sample_timing()
     update_timing_hud()
+    update_view(0.0)
 
     def start_race(
         next_race_index: int,
@@ -942,6 +955,7 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
             config=FORMULA_VEHICLE_PHYSICS_CONFIG,
             random_seed=config.random_seed,
             race_index=next_race_index,
+            shuffle_grid=not isinstance(config, HeatViewerConfig),
         )
         next_start_finish_progress_pose = seeded_race_start_finish_pose(
             model=model,
@@ -1016,8 +1030,8 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
             audio_control=audio_control, audio_runtime=audio_runtime, mute_key_down=bool(ursina.held_keys["m"])
         )
         if race_concluded:
-            update_view(frame_delta_seconds)
             update_timing_hud()
+            update_view(frame_delta_seconds)
             audio_runtime.update(frame_delta_seconds)
             _sync_audio_hud_control(audio_control=audio_control, audio_runtime=audio_runtime)
             return
@@ -1073,8 +1087,8 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
             if race_elapsed_seconds >= config.round_seconds:
                 break
 
-        update_view(frame_delta_seconds)
         update_timing_hud()
+        update_view(frame_delta_seconds)
         audio_runtime.update(frame_delta_seconds)
         _sync_audio_hud_control(audio_control=audio_control, audio_runtime=audio_runtime)
         _update_head_to_head_hud(
@@ -1145,6 +1159,10 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
                     _head_to_head_result_color(config=config, result=final_result),
                 )
                 app.racing_result = final_result
+            text_width = max(
+                float(result_display.node().calcWidth(line)) for line in result_display.node().getText().splitlines()
+            )
+            result_display.setScale(min(0.070, 2.34 / max(1.0, text_width)))
             result_background.show()
             result_display.show()
             for runtime in runtimes:
@@ -1162,6 +1180,7 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
         previous_marshal_counts.clear()
         sample_timing()
         update_timing_hud()
+        update_view(0.0)
         simulation_accumulator_seconds = 0.0
 
     ursina.Entity(name="head_to_head_viewer_loop", update=update, ignore_paused=True)
@@ -1369,6 +1388,10 @@ def _update_head_to_head_car_labels(*, ursina: Any, view: CameraView, runtimes: 
     for runtime in runtimes:
         if not isinstance(runtime.label, HeadToHeadCarLabel):
             continue
+        if runtime.robot.eliminated:
+            runtime.label.background.hide()
+            runtime.label.text.hide()
+            continue
         screen_position = _head_to_head_car_label_screen_position(ursina=ursina, robot=runtime.robot)
         if screen_position is None:
             runtime.label.background.hide()
@@ -1378,7 +1401,8 @@ def _update_head_to_head_car_labels(*, ursina: Any, view: CameraView, runtimes: 
         runtime.label.text.show()
         label_x, label_y = screen_position
         runtime.label.background.setScale(layout.width, layout.height, 1.0)
-        runtime.label.text.setScale(layout.text_scale)
+        text_width = float(runtime.label.text.node().calcWidth(runtime.label.text.node().getText()))
+        runtime.label.text.setScale(min(layout.text_scale, (layout.width - 0.03) / max(1.0, text_width)))
         runtime.label.background.setPos(label_x, label_y + layout.vertical_offset, 0.0)
         runtime.label.text.setPos(label_x, label_y + layout.vertical_offset - layout.height * 0.15, 0.0)
 
@@ -1386,10 +1410,10 @@ def _update_head_to_head_car_labels(*, ursina: Any, view: CameraView, runtimes: 
 def head_to_head_car_label_layout(view: CameraView) -> HeadToHeadCarLabelLayout:
     """Choose a readable floating-label layout for a camera view."""
     if view in (CameraView.TOP_DOWN, CameraView.THREE_QUARTER):
-        return HeadToHeadCarLabelLayout(width=0.34, height=0.070, text_scale=0.034, vertical_offset=0.090)
+        return HeadToHeadCarLabelLayout(width=0.28, height=0.060, text_scale=0.030, vertical_offset=0.080)
     if view is CameraView.FOLLOW:
-        return HeadToHeadCarLabelLayout(width=0.40, height=0.080, text_scale=0.038, vertical_offset=0.170)
-    return HeadToHeadCarLabelLayout(width=0.42, height=0.084, text_scale=0.040, vertical_offset=0.110)
+        return HeadToHeadCarLabelLayout(width=0.35, height=0.070, text_scale=0.034, vertical_offset=0.160)
+    return HeadToHeadCarLabelLayout(width=0.37, height=0.074, text_scale=0.036, vertical_offset=0.100)
 
 
 def _head_to_head_car_label_screen_position(*, ursina: Any, robot: RobotVehicle) -> tuple[float, float] | None:

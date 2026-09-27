@@ -87,7 +87,8 @@ def build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
         epilog=(
             "Additional racing h2h/heat options after the IDs are forwarded, e.g. --races 3 --round-seconds 60 "
-            "--camera follow --no-audio. --seed controls starting positions and grid order; "
+            "--camera follow --no-audio. Heats start in ID order, first ID on pole. "
+            "--seed controls starting positions (and grid order in h2h); "
             "--track-seed INT generates a reproducible procedural track."
         ),
     )
@@ -105,7 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=race_seed,
         default=DEFAULT_RACE_RANDOM_SEED,
         metavar="INT|random",
-        help=f"starting-position/grid seed, or 'random' (default: {DEFAULT_RACE_RANDOM_SEED})",
+        help=f"starting-position seed (also grid order in h2h), or 'random' (default: {DEFAULT_RACE_RANDOM_SEED})",
     )
     parser.add_argument("--headless", action="store_true", help="run without the default watched three-quarter view")
     parser.add_argument(

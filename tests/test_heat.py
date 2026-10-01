@@ -40,22 +40,22 @@ def _entrants(count: int = 4) -> tuple[HeatEntrant, ...]:
     )
 
 
-@pytest.mark.parametrize("count", [0, 1, 11])
-def test_heat_requires_two_to_ten_entrants_before_starting_physics(count: int) -> None:
+@pytest.mark.parametrize("count", [0, 1, 21])
+def test_heat_requires_two_to_twenty_entrants_before_starting_physics(count: int) -> None:
     entrants = tuple(_entrants()[0] for _ in range(count))
 
-    with pytest.raises(ValueError, match="two to ten"):
+    with pytest.raises(ValueError, match="two to twenty"):
         validate_heat_entrants(entrants)
-    with pytest.raises(ValueError, match="two to ten"):
+    with pytest.raises(ValueError, match="two to twenty"):
         run_headless_heat(entrants=entrants)
-    with pytest.raises(ValueError, match="two to ten"):
+    with pytest.raises(ValueError, match="two to twenty"):
         heat_race_entries(entrant_count=count, race_index=1)
-    with pytest.raises(ValueError, match="two to ten"):
+    with pytest.raises(ValueError, match="two to twenty"):
         HeatResult(entrant_names=tuple(entrant.name for entrant in entrants), round_seconds=30.0, races=())
 
 
 @pytest.mark.parametrize("race_index", [1, 2, 3])
-@pytest.mark.parametrize("entrant_count", [2, 3, 4, 5, 6, 7, 8, 9, 10])
+@pytest.mark.parametrize("entrant_count", [2, 3, 4, 5, 6, 7, 8, 9, 10, 20])
 def test_heat_grid_preserves_input_order_and_individual_identity(race_index: int, entrant_count: int) -> None:
     arguments = {"entrant_count": entrant_count, "race_index": race_index, "random_seed": 781}
     entries = heat_race_entries(**arguments)
@@ -234,9 +234,9 @@ class _RecordingController:
         return control
 
 
-@pytest.mark.parametrize("entrant_count", [2, 3, 4, 5, 6, 7, 8, 9, 10])
+@pytest.mark.parametrize("entrant_count", [2, 3, 4, 5, 6, 7, 8, 9, 10, 20])
 def test_headless_heat_runs_all_controllers_with_fresh_state_each_race(entrant_count: int) -> None:
-    controllers = tuple(_RecordingController(index * 0.1) for index in range(entrant_count))
+    controllers = tuple(_RecordingController(index / entrant_count) for index in range(entrant_count))
     entrants = tuple(
         HeatEntrant(name=f"Controller {index}", controller=controller, team_color=DEFAULT_HEAT_COLORS[index])
         for index, controller in enumerate(controllers)

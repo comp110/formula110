@@ -148,12 +148,14 @@ def setup_workers(planner: ModuleType, monkeypatch: pytest.MonkeyPatch) -> list[
 
 
 @pytest.mark.parametrize("selection_priority", ["highest", "lowest"])
+@pytest.mark.parametrize("bahrain_cars", [10, 20])
 def test_full_pipeline_bahrain_fields_commands_and_resume(
     planner: ModuleType,
     export: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     selection_priority: str,
+    bahrain_cars: int,
 ) -> None:
     tried = setup_workers(planner, monkeypatch)
     output = tmp_path / "show plan.json"
@@ -173,6 +175,8 @@ def test_full_pipeline_bahrain_fields_commands_and_resume(
         "3",
         "--bahrain-seed-count",
         "3",
+        "--bahrain-cars",
+        str(bahrain_cars),
         "--jobs",
         "2",
         "--marshal-penalty-m",
@@ -200,7 +204,7 @@ def test_full_pipeline_bahrain_fields_commands_and_resume(
     assert len(plan["show_runner"]) == 7
     assert len({c["submission_id"] for g in plan["groups"] for c in g["competitors"]}) == 50
     assert all(
-        [c["submission_id"] for c in group["competitors"]] == [str(i) for i in range(1, 11)]
+        [c["submission_id"] for c in group["competitors"]] == [str(i) for i in range(1, bahrain_cars + 1)]
         for group in plan["bahrain_groups"]
     )
     assert plan["schema_version"] == 2
@@ -218,7 +222,7 @@ def test_full_pipeline_bahrain_fields_commands_and_resume(
             assert "--fullscreen" not in argv
             assert "--no-music" in argv and "--muted" in argv
             assert "--no-damage" in argv
-            assert len(race["classification"]) == 10
+            assert len(race["classification"]) == (bahrain_cars if stage["track"] == "bahrain" else 10)
             assert [c["finish_position"] for c in race["podium"]] == [1, 2, 3]
     assert all(spec.rules.marshal_penalty_m == 12.5 for spec in tried)
     assert all(spec.rules.marshal_stuck_seconds == 2.5 for spec in tried)
@@ -247,6 +251,8 @@ def test_full_pipeline_bahrain_fields_commands_and_resume(
     assert argv[argv.index("--camera") + 1] == "drone" and "--fullscreen" in argv
     with pytest.raises(SystemExit):
         planner.main([*args, "--resume", "--marshal-penalty-m", "0"])
+    with pytest.raises(SystemExit):
+        planner.main([*args, "--resume", "--bahrain-cars", "15"])
     with pytest.raises(SystemExit):
         planner.main(
             [
@@ -340,17 +346,18 @@ def test_failed_trials_are_saved_and_retried_without_repeating_successes(
     assert json.loads(output.read_text())["status"] == "complete"
 
 
+@pytest.mark.parametrize("car_count", [10, 20])
 def test_bahrain_qualifies_directly_from_all_spawns_and_only_closed_field_excludes_juiced(
-    planner: ModuleType, export: Path
+    planner: ModuleType, export: Path, car_count: int
 ) -> None:
     path = export / "submission_metadata.yml"
     payload = yaml.safe_load(path.read_text())
     for key, record in payload.items():
         record[":results"]["leaderboard"][-1]["value"] = int(key.removeprefix("submission_"))
     path.write_text(yaml.safe_dump(payload))
-    groups = planner.build_bahrain_groups(export, {"60", "58"})
-    assert [c["submission_id"] for c in groups[0]["competitors"]] == ["59", *map(str, range(57, 48, -1))]
-    assert [c["submission_id"] for c in groups[1]["competitors"]] == list(map(str, range(60, 50, -1)))
+    groups = planner.build_bahrain_groups(export, {"60", "58"}, car_count)
+    assert [c["submission_id"] for c in groups[0]["competitors"]] == ["59", *map(str, range(57, 58 - car_count, -1))]
+    assert [c["submission_id"] for c in groups[1]["competitors"]] == list(map(str, range(60, 60 - car_count, -1)))
     assert all(g["round_laps"] == 3 and g["track"] == "bahrain" for g in groups)
     assert all(g["leaderboard"]["order"] == "desc" and "All Spawns, No Crumbs" in g["title"] for g in groups)
     assert {c["submission_id"] for c in groups[1]["competitors"] if c["is_juiced"]} == {"60", "58"}

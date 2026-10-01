@@ -38,7 +38,7 @@ def _heat_entrants(entrant_count: int = 4) -> tuple[HeatEntrant, ...]:
     )
 
 
-@pytest.mark.parametrize("entrant_count", [2, 3, 4, 7, 8, 9, 10])
+@pytest.mark.parametrize("entrant_count", [2, 3, 4, 7, 8, 9, 10, 20])
 def test_heat_viewer_preserves_grid_order_and_entrant_metadata(entrant_count: int) -> None:
     config = HeatViewerConfig(entrants=_heat_entrants(entrant_count), random_seed=110)
     orders: set[tuple[int, ...]] = set()
@@ -84,7 +84,7 @@ def test_retired_car_badge_hides_without_projection_and_returns_after_reset(monk
     text.show.assert_called_once()
 
 
-@pytest.mark.parametrize("entrant_count", [2, 3, 4, 7, 8, 9, 10])
+@pytest.mark.parametrize("entrant_count", [2, 3, 4, 7, 8, 9, 10, 20])
 def test_heat_viewer_recreates_factory_controller_state_for_each_car_and_race(
     tmp_path: Path, entrant_count: int
 ) -> None:
@@ -120,15 +120,15 @@ def test_heat_viewer_recreates_factory_controller_state_for_each_car_and_race(
     assert len({id(controller) for controller in (*first, *second, prototype)}) == 2 * entrant_count + 1
 
 
-@pytest.mark.parametrize("entrant_count", [0, 1, 11])
+@pytest.mark.parametrize("entrant_count", [0, 1, 21])
 def test_heat_viewer_rejects_wrong_entrant_count_before_graphics_startup(
     entrant_count: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     create_scene = Mock()
     monkeypatch.setattr(app, "_build_race_viewer_scene", create_scene)
-    entrants = (_heat_entrants() * 3)[:entrant_count]
+    entrants = (_heat_entrants() * 6)[:entrant_count]
 
-    with pytest.raises(ValueError, match="two to ten"):
+    with pytest.raises(ValueError, match="two to twenty"):
         create_heat_viewer_app(HeatViewerConfig(entrants=entrants))
 
     create_scene.assert_not_called()
@@ -143,7 +143,7 @@ def test_heat_viewer_accepts_split_view(monkeypatch: pytest.MonkeyPatch) -> None
     create_scene.assert_called_once_with(config)
 
 
-@pytest.mark.parametrize("entrant_count", [2, 3, 4, 7, 8, 9, 10])
+@pytest.mark.parametrize("entrant_count", [2, 3, 4, 7, 8, 9, 10, 20])
 def test_heat_viewer_accepts_supported_counts_before_starting_shared_scene(
     entrant_count: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:

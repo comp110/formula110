@@ -281,7 +281,7 @@ def test_submissions_with_identical_controller_names_load_independently(runner: 
 
 
 @pytest.mark.parametrize("headless", [False, True])
-@pytest.mark.parametrize("entrant_count", [3, 4, 5, 6, 7, 8, 9, 10])
+@pytest.mark.parametrize("entrant_count", [3, 4, 5, 6, 7, 8, 9, 10, 20])
 def test_heat_ids_dispatch_with_ordered_submission_labels_and_shared_options(
     runner: ModuleType,
     tmp_path: Path,
@@ -340,8 +340,8 @@ def test_heat_ids_dispatch_with_ordered_submission_labels_and_shared_options(
     assert f"Entrant {entrant_count} #{identifiers[-1]}:" in output.err
 
 
-@pytest.mark.parametrize("entrant_count", [1, 11])
-def test_wrapper_requires_two_to_ten_ids(
+@pytest.mark.parametrize("entrant_count", [1, 21])
+def test_wrapper_requires_two_to_twenty_ids(
     runner: ModuleType,
     entrant_count: int,
     capsys: pytest.CaptureFixture[str],
@@ -351,10 +351,10 @@ def test_wrapper_requires_two_to_ten_ids(
         runner.main(identifiers)
 
     assert error.value.code == 2
-    assert "provide two to ten submission IDs" in capsys.readouterr().err
+    assert "provide two to twenty submission IDs" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("entrant_count", [3, 4, 5, 6, 7, 8, 9, 10])
+@pytest.mark.parametrize("entrant_count", [3, 4, 5, 6, 7, 8, 9, 10, 20])
 def test_heat_rejects_duplicate_submission_ids(
     runner: ModuleType,
     capsys: pytest.CaptureFixture[str],
@@ -368,7 +368,7 @@ def test_heat_rejects_duplicate_submission_ids(
     assert f"{entrant_count} distinct submission IDs" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("entrant_count", [3, 4, 5, 6, 7, 8, 9, 10])
+@pytest.mark.parametrize("entrant_count", [3, 4, 5, 6, 7, 8, 9, 10, 20])
 def test_heat_dry_run_resolves_modules_without_importing_them(
     runner: ModuleType,
     tmp_path: Path,

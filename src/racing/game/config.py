@@ -131,7 +131,7 @@ class HeadToHeadViewerConfig:
 
 @dataclass(frozen=True, slots=True)
 class HeatViewerConfig:
-    """Settings for a four-, eight-, or nine-controller race with individual standings."""
+    """Settings for a two- to twenty-controller race with individual standings."""
 
     entrants: tuple[HeatEntrant, ...] = ()
     starting_grid: bool = False

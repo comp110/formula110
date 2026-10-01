@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rank headless two-to-ten-car lap races by lead changes, overtakes, and close finishes."""
+"""Rank headless two-to-twenty-car lap races by lead changes, overtakes, and close finishes."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ class RaceSpec:
 
     def validate(self) -> None:
         if len(self.submissions) not in HEAT_ENTRANT_COUNTS or len(set(self.submissions)) != len(self.submissions):
-            raise ValueError("provide two to ten distinct submission IDs")
+            raise ValueError("provide two to twenty distinct submission IDs")
         if self.names and (len(self.names) != len(self.submissions) or any(not name.strip() for name in self.names)):
             raise ValueError("repeat --name once per car, with nonempty names")
         if self.round_laps < 1:

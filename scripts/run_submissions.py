@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Race two to ten submissions from an extracted Gradescope assignment export."""
+"""Race two to twenty submissions from an extracted Gradescope assignment export."""
 
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--track-seed INT generates a reproducible procedural track."
         ),
     )
-    parser.add_argument("submissions", type=submission_id, nargs="+", metavar="ID", help="two to ten submission IDs")
+    parser.add_argument("submissions", type=submission_id, nargs="+", metavar="ID", help="two to twenty submission IDs")
     parser.add_argument(
         "--export-dir",
         type=Path,
@@ -159,7 +159,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         extra = extra[1:]
     identifiers = cast(list[str], args.submissions)
     if len(identifiers) not in HEAT_ENTRANT_COUNTS:
-        parser.error("provide two to ten submission IDs")
+        parser.error("provide two to twenty submission IDs")
     is_heat = args.heat or len(identifiers) != 2
     if is_heat and len(set(identifiers)) != len(identifiers):
         parser.error(f"a {len(identifiers)}-car heat requires {len(identifiers)} distinct submission IDs")

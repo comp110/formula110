@@ -32,7 +32,7 @@ def heat_modules(tmp_path: Path, request: pytest.FixtureRequest) -> list[str]:
     return args
 
 
-@pytest.mark.parametrize("heat_modules", [2, 3, 4, 7, 8, 9, 10], indirect=True)
+@pytest.mark.parametrize("heat_modules", [2, 3, 4, 7, 8, 9, 10, 20], indirect=True)
 def test_headless_heat_loads_independent_controllers_and_forwards_race_settings(
     heat_modules: list[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -90,7 +90,7 @@ def test_headless_heat_loads_independent_controllers_and_forwards_race_settings(
     assert json.loads(capsys.readouterr().out) == FakeResult().to_dict()
 
 
-@pytest.mark.parametrize("heat_modules", [2, 3, 4, 7, 8, 9, 10], indirect=True)
+@pytest.mark.parametrize("heat_modules", [2, 3, 4, 7, 8, 9, 10, 20], indirect=True)
 def test_watched_heat_applies_names_camera_window_and_audio_settings(
     heat_modules: list[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -157,7 +157,7 @@ def test_watched_heat_applies_names_camera_window_and_audio_settings(
 @pytest.mark.parametrize(
     ("args", "message"),
     [
-        (["--module", "missing.py"], "heat requires two to ten --module arguments"),
+        (["--module", "missing.py"], "heat requires two to twenty --module arguments"),
         (["--name", "First"], "--name must be repeated 4 times"),
         (["--fallback-name", "First"], "--fallback-name must be repeated 4 times"),
         (["--watch", "--json"], "--json is only available for headless heats"),
@@ -176,13 +176,13 @@ def test_invalid_heat_arguments_fail_before_loading_modules(
     assert message in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("entrant_count", [1, 11])
+@pytest.mark.parametrize("entrant_count", [1, 21])
 def test_heat_rejects_unsupported_entrant_counts(entrant_count: int, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as error:
         cli.main(["heat", *(["--module", "missing.py"] * entrant_count)])
 
     assert error.value.code == 2
-    assert "heat requires two to ten --module arguments" in capsys.readouterr().err
+    assert "heat requires two to twenty --module arguments" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("flag", ["--name", "--fallback-name"])

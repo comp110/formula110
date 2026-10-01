@@ -67,7 +67,7 @@ def test_single_car_spawn_position_is_deterministic_for_seed() -> None:
     assert first.progress_distance_m != different.progress_distance_m
 
 
-@pytest.mark.parametrize("car_count", [4, 8, 9, 10])
+@pytest.mark.parametrize("car_count", [4, 8, 9, 10, 20])
 @pytest.mark.parametrize("seed", [1, 110, 271])
 @pytest.mark.parametrize("race_index", [1, 2])
 def test_ordered_grid_runs_from_pole_to_back_across_track_wrap(car_count: int, seed: int, race_index: int) -> None:

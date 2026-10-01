@@ -34,7 +34,7 @@ from score_races import (
 )
 
 from racing.game.config import CameraView
-from racing.race.heat import DEFAULT_HEAT_COLORS
+from racing.race.heat import DEFAULT_HEAT_COLORS, HEAT_ENTRANT_COUNTS
 from racing.race.interest import InterestWeights
 from racing.race.rules import HeadToHeadRaceRules
 from racing.student.api import load_student_submission
@@ -445,16 +445,18 @@ def rank_stage(stage: dict[str, Any], records: dict[str, dict[str, Any]], settin
         )
 
 
-def build_bahrain_groups(export_dir: Path, held_out: set[str]) -> list[dict[str, Any]]:
-    """Select independent All Spawns top tens, without category-allocation exclusions."""
+def build_bahrain_groups(export_dir: Path, held_out: set[str], car_count: int = 10) -> list[dict[str, Any]]:
+    """Select independent All Spawns fields, without category-allocation exclusions."""
+    if car_count not in HEAT_ENTRANT_COUNTS:
+        raise ValueError("Bahrain fields require two to twenty cars")
     boards, _ = read_leaderboards(export_dir)
     board = select_boards(boards, ["All Spawns, No Crumbs"])[0]
     if board.order != "desc":
         raise ValueError("All Spawns, No Crumbs must rank most laps first (descending)")
     groups = []
     for identifier, title, exclude_juiced in (
-        ("bahrain-no-juiced", "Bahrain - All Spawns, No Crumbs Top 10 (No Juiced)", True),
-        ("bahrain-open", "Bahrain - All Spawns, No Crumbs Top 10 (Open, Including Juiced)", False),
+        ("bahrain-no-juiced", f"Bahrain - All Spawns, No Crumbs Top {car_count} (No Juiced)", True),
+        ("bahrain-open", f"Bahrain - All Spawns, No Crumbs Top {car_count} (Open, Including Juiced)", False),
     ):
         competitors = []
         for rank, leader in enumerate(board.ranked(), start=1):
@@ -472,10 +474,12 @@ def build_bahrain_groups(export_dir: Path, held_out: set[str]) -> list[dict[str,
                     "controller_path": str(resolve_controller(export_dir, leader.submission_id)),
                 }
             )
-            if len(competitors) == 10:
+            if len(competitors) == car_count:
                 break
-        if len(competitors) != 10:
-            raise ValueError(f"{title}: need 10 eligible All Spawns, No Crumbs entrants; found {len(competitors)}")
+        if len(competitors) != car_count:
+            raise ValueError(
+                f"{title}: need {car_count} eligible All Spawns, No Crumbs entrants; found {len(competitors)}"
+            )
         groups.append(
             {
                 "id": identifier,
@@ -840,6 +844,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--bahrain-seed-count", type=positive_int, default=100, help="seeds per Bahrain field (default: 100)"
     )
     parser.add_argument(
+        "--bahrain-cars",
+        type=int,
+        choices=HEAT_ENTRANT_COUNTS,
+        default=10,
+        help="cars per Bahrain field; use 20 for a full grid (default: 10)",
+    )
+    parser.add_argument(
         "--target-seconds", type=positive_float, default=90.0, help="target simulated heat duration (default: 90)"
     )
     parser.add_argument(
@@ -949,7 +960,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         held_out_scores = filter_juiced_scores(
             review_scores or {}, args.juiced_threshold, lap_scores=review_laps, min_laps=args.juiced_min_laps
         )
-        bahrain_groups = build_bahrain_groups(export_dir, set(held_out_scores))
+        bahrain_groups = build_bahrain_groups(export_dir, set(held_out_scores), args.bahrain_cars)
         lap_counts = {category.id: category.laps for category in CATEGORIES} | {
             "bahrain-no-juiced": 3,
             "bahrain-open": 3,
@@ -996,6 +1007,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "starts_per_track": args.starts_per_track,
             "fixed_seed_count": args.fixed_seed_count or args.track_count * args.starts_per_track,
             "bahrain_seed_count": args.bahrain_seed_count,
+            "bahrain_cars": args.bahrain_cars,
             "target_seconds": args.target_seconds,
             "duration_tolerance_seconds": args.duration_tolerance_seconds,
             "duration_weight": args.duration_weight,
@@ -1057,7 +1069,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for identifier in sorted(held_out_scores, key=int)
             ],
         },
-        "bahrain_qualification": "Independent All Spawns, No Crumbs top tens: excluding Juiced, then open to everyone",
+        "bahrain_qualification": (
+            f"Independent All Spawns, No Crumbs top {args.bahrain_cars}: excluding Juiced, then open to everyone"
+        ),
         "selection_policy": (
             f"{args.selection_priority.capitalize()} category first; "
             "backfill each to 10 after juiced holdouts; regular groups are exclusive, Bahrain fields are independent"

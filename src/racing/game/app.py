@@ -608,7 +608,7 @@ def build_head_to_head_viewer_scene(config: HeadToHeadViewerConfig) -> RunnableA
 
 
 def create_heat_viewer_app(config: HeatViewerConfig) -> RunnableApp:
-    """Create a two-to-ten-controller heat using the shared viewer and physics."""
+    """Create a two-to-twenty-controller heat using the shared viewer and physics."""
     validate_heat_entrants(config.entrants)
     validate_round_laps(config.round_laps)
     validate_finish_timeout_seconds(config.finish_timeout_seconds)

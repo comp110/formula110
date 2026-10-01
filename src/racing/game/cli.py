@@ -273,7 +273,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="incumbent formula car paint color",
     )
 
-    heat_parser = subparsers.add_parser("heat", help="race two to ten student controllers on one shared grid")
+    heat_parser = subparsers.add_parser("heat", help="race two to twenty student controllers on one shared grid")
     _add_starting_grid_arguments(heat_parser)
     _add_student_print_argument(heat_parser, suppress_defaults=True)
     heat_parser.add_argument(
@@ -281,7 +281,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         action="append",
         required=True,
         metavar="MODULE",
-        help="controller file or module; repeat two to ten times in entrant order",
+        help="controller file or module; repeat two to twenty times in entrant order",
     )
     heat_parser.add_argument(
         "--name",
@@ -423,7 +423,7 @@ def _run_heat_from_args(
         parser.error("--finish-timeout-seconds must be finite and nonnegative")
     modules = cast(list[str], args.module)
     if len(modules) not in HEAT_ENTRANT_COUNTS:
-        parser.error("heat requires two to ten --module arguments")
+        parser.error("heat requires two to twenty --module arguments")
     names = cast(list[str] | None, args.name)
     fallback_names = cast(list[str] | None, args.fallback_name)
     grid_names = cast(list[str] | None, args.grid_name)

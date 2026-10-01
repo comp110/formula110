@@ -65,7 +65,8 @@ def main() -> None:
     )) if args.h2h else create_heat_viewer_app(HeatViewerConfig(
         **common, grid_names=names,
         entrants=tuple(
-            HeatEntrant(f"Car {index + 1}", controller, color) for index, color in enumerate(DEFAULT_HEAT_COLORS)
+            HeatEntrant(f"Car {index + 1}", controller, color)
+            for index, color in enumerate(DEFAULT_HEAT_COLORS[:len(names)])
         ),
     )))
     try:

@@ -1,4 +1,4 @@
-"""Heats for two to ten controllers using shared racing physics and scoring."""
+"""Heats for two to twenty controllers using shared racing physics and scoring."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ from racing.race.timing import TimingSample
 from racing.student.api import RobotController
 from racing.track.world import TRACK_ID_MUGELLO_SHORT, TrackPoint
 
-HEAT_ENTRANT_COUNTS = tuple(range(2, 11))
+HEAT_ENTRANT_COUNTS = tuple(range(2, 21))
 HEAT_RESULT_SCHEMA_VERSION = 1
 DEFAULT_HEAT_COLORS: tuple[ColorRGBA, ...] = (
     UNC_CAROLINA_BLUE,
@@ -52,6 +52,16 @@ DEFAULT_HEAT_COLORS: tuple[ColorRGBA, ...] = (
     (0.93, 0.93, 0.96, 1.0),
     (0.93, 0.12, 0.16, 1.0),
     (0.64, 0.86, 0.18, 1.0),
+    (0.28, 0.36, 0.93, 1.0),
+    (0.98, 0.64, 0.72, 1.0),
+    (0.08, 0.48, 0.35, 1.0),
+    (0.68, 0.40, 0.20, 1.0),
+    (0.75, 0.68, 0.98, 1.0),
+    (0.55, 0.84, 0.96, 1.0),
+    (0.56, 0.12, 0.26, 1.0),
+    (0.93, 0.48, 0.83, 1.0),
+    (0.62, 0.66, 0.71, 1.0),
+    (0.98, 0.89, 0.56, 1.0),
 )
 
 
@@ -156,7 +166,7 @@ class HeatResult:
         validate_finish_timeout_seconds(self.finish_timeout_seconds)
         entrant_count = len(self.entrant_names)
         if entrant_count not in HEAT_ENTRANT_COUNTS:
-            raise ValueError("a heat requires two to ten entrants")
+            raise ValueError("a heat requires two to twenty entrants")
         expected = set(range(entrant_count))
         for race in self.races:
             if (
@@ -243,9 +253,9 @@ class HeatResult:
 
 
 def validate_heat_entrants(entrants: tuple[HeatEntrant, ...]) -> None:
-    """Validate the two to ten independent car slots used by a heat."""
+    """Validate the two to twenty independent car slots used by a heat."""
     if len(entrants) not in HEAT_ENTRANT_COUNTS:
-        raise ValueError("a heat requires two to ten entrants")
+        raise ValueError("a heat requires two to twenty entrants")
     for index, entrant in enumerate(entrants, start=1):
         if not entrant.name.strip():
             raise ValueError(f"heat entrant {index} needs a nonempty name")
@@ -258,7 +268,7 @@ def heat_race_entries(
 ) -> tuple[HeatRaceEntry, ...]:
     """Keep entrants in input order for every heat, independent of the spawn seed."""
     if entrant_count not in HEAT_ENTRANT_COUNTS:
-        raise ValueError("a heat requires two to ten entrants")
+        raise ValueError("a heat requires two to twenty entrants")
     if race_index < 1:
         raise ValueError("race_index must be at least one")
     return tuple(HeatRaceEntry(entrant_index=index) for index in range(entrant_count))
@@ -353,7 +363,7 @@ def run_headless_heat(
     fixed_delta_seconds: float = 1 / 60,
     observer: Callable[[HeatRaceSnapshot], None] | None = None,
 ) -> HeatResult:
-    """Race two to ten independent controllers through the shared physics loop."""
+    """Race two to twenty independent controllers through the shared physics loop."""
     validate_heat_entrants(entrants)
     validate_round_laps(round_laps)
     validate_finish_timeout_seconds(finish_timeout_seconds)

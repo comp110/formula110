@@ -71,6 +71,7 @@ Keyboard controls:
 - Left arrow: steer left
 - Right arrow: steer right
 - `V`: cycle camera views
+- `Q` / `W` / `E` / `R` / `T` / `Y`: top-down / three-quarter / drone / helicopter / cinematic / close follow
 - `M`: mute or unmute audio
 
 Things to notice:

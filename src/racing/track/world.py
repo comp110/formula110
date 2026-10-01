@@ -66,6 +66,7 @@ TRACK_WIDTH = (2.3 * TRACK_SCALE) + NOMINAL_CAR_WIDTH
 TRACK_ID_MUGELLO_SHORT = "mugello-short"
 TRACK_ID_MUGELLO_SHORT_WIDE = "mugello-short-wide"
 TRACK_ID_MUGELLO_SHORT_LONG = "mugello-short-long"
+TRACK_ID_BAHRAIN = "bahrain"
 
 
 def _scaled_track_point(x: float, z: float, label: str = "") -> TrackPoint:
@@ -132,6 +133,89 @@ MUGELLO_SHORT_LONG_LAYOUT = _scaled_layout_about_start(
     x_scale=0.94,
     z_scale=1.06,
 )
+
+
+def _bahrain_track_point(x: float, y: float, label: str = "") -> TrackPoint:
+    # Trace coordinates from the circuit map, centered in X/Z. Increasing image
+    # Y maps to +Z to preserve the outline in Ursina's top-down camera.
+    # This is a game-scale layout, not survey geometry.
+    # Halve the original 0.22 scale, with local apex and infield adjustments
+    # below to keep the shared road width and barriers clear at the smaller size.
+    return TrackPoint((x - 1000.0) * 0.11, (y - 530.0) * 0.11, label)
+
+
+BAHRAIN_START_POSITION = _bahrain_track_point(1094.0, 920.0, "Start grid")
+BAHRAIN_LAYOUT: tuple[TrackPoint, ...] = (
+    _bahrain_track_point(1150.0, 920.0, "Start straight"),
+    _bahrain_track_point(900.0, 920.0, "Main straight"),
+    _bahrain_track_point(700.0, 920.0),
+    _bahrain_track_point(520.0, 920.0),
+    _bahrain_track_point(454.3, 926.7, "Opening hairpin approach"),
+    _bahrain_track_point(419.4, 910.4, "Opening hairpin"),
+    _bahrain_track_point(403.5, 879.1),
+    _bahrain_track_point(407.6, 834.3),
+    _bahrain_track_point(417.7, 808.3, "Opening left"),
+    _bahrain_track_point(424.5, 781.6),
+    _bahrain_track_point(420.0, 743.0, "Opening right"),
+    _bahrain_track_point(416.0, 704.0),
+    _bahrain_track_point(428.0, 616.0, "Outer straight"),
+    _bahrain_track_point(448.0, 479.0),
+    _bahrain_track_point(468.0, 342.0),
+    _bahrain_track_point(477.3, 212.2),
+    _bahrain_track_point(491.9, 167.8),
+    _bahrain_track_point(519.2, 146.7, "Upper left hairpin"),
+    _bahrain_track_point(553.6, 146.8),
+    _bahrain_track_point(587.0, 170.2),
+    _bahrain_track_point(625.0, 240.0),
+    _bahrain_track_point(704.0, 307.0, "Infield esses entry"),
+    _bahrain_track_point(755.0, 330.0),
+    _bahrain_track_point(788.3, 359.9, "Infield esses right"),
+    _bahrain_track_point(799.0, 394.3),
+    _bahrain_track_point(796.2, 444.6),
+    _bahrain_track_point(805.6, 482.7, "Infield esses left"),
+    _bahrain_track_point(845.4, 522.6),
+    _bahrain_track_point(931.6, 543.3),
+    _bahrain_track_point(969.8, 584.0, "Infield hairpin approach"),
+    _bahrain_track_point(973.0, 623.3, "Infield hairpin"),
+    _bahrain_track_point(947.7, 655.1),
+    _bahrain_track_point(900.8, 665.0),
+    _bahrain_track_point(799.6, 636.2),
+    _bahrain_track_point(682.6, 626.8),
+    _bahrain_track_point(639.5, 625.4, "Double left entry"),
+    _bahrain_track_point(589.8, 642.3),
+    _bahrain_track_point(568.1, 674.1, "Double left apex"),
+    _bahrain_track_point(573.5, 712.8),
+    _bahrain_track_point(608.2, 746.2),
+    _bahrain_track_point(692.0, 769.0, "Back straight"),
+    _bahrain_track_point(875.0, 770.0),
+    _bahrain_track_point(1060.0, 771.0),
+    _bahrain_track_point(1217.0, 772.0),
+    _bahrain_track_point(1267.1, 725.6),
+    _bahrain_track_point(1286.9, 694.8, "Back straight left"),
+    _bahrain_track_point(1292.4, 655.7),
+    _bahrain_track_point(1275.6, 599.0),
+    _bahrain_track_point(1234.0, 558.0, "Sweeping right"),
+    _bahrain_track_point(1174.0, 535.0),
+    _bahrain_track_point(1116.0, 513.0),
+    _bahrain_track_point(1077.0, 477.0),
+    _bahrain_track_point(1057.0, 423.0, "Upper infield right"),
+    _bahrain_track_point(1062.0, 370.0),
+    _bahrain_track_point(1095.5, 281.8),
+    _bahrain_track_point(1115.9, 226.9),
+    _bahrain_track_point(1149.4, 204.4, "Final sector hairpin"),
+    _bahrain_track_point(1187.3, 211.1),
+    _bahrain_track_point(1222.2, 250.7),
+    _bahrain_track_point(1300.0, 387.0, "Final straight"),
+    _bahrain_track_point(1390.0, 535.0),
+    _bahrain_track_point(1480.0, 683.0),
+    _bahrain_track_point(1567.4, 811.1),
+    _bahrain_track_point(1585.7, 861.8, "Final corner"),
+    _bahrain_track_point(1572.4, 900.3),
+    _bahrain_track_point(1530.0, 923.4, "Main straight entry"),
+    _bahrain_track_point(1430.0, 920.0),
+    _bahrain_track_point(1270.0, 920.0),
+)
+
 TRACK_LAYOUTS = (
     TrackLayout(
         track_id=TRACK_ID_MUGELLO_SHORT,
@@ -147,6 +231,11 @@ TRACK_LAYOUTS = (
         track_id=TRACK_ID_MUGELLO_SHORT_LONG,
         points=MUGELLO_SHORT_LONG_LAYOUT,
         start_position=START_POSITION,
+    ),
+    TrackLayout(
+        track_id=TRACK_ID_BAHRAIN,
+        points=BAHRAIN_LAYOUT,
+        start_position=BAHRAIN_START_POSITION,
     ),
 )
 

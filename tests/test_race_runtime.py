@@ -18,9 +18,11 @@ from racing.race.runtime import (
     RaceCarRuntime,
     RaceContactState,
     RaceRecoveryConfig,
+    lap_progress_tracker_for_spawn_pose,
     maybe_marshal_race_runtimes,
     race_scored_distance_m,
     race_spawn_poses,
+    race_track_position_m,
     seeded_race_start_finish_pose,
     start_finish_pose_for_progress,
     update_race_runtime_after_step,
@@ -65,11 +67,11 @@ def test_single_car_spawn_position_is_deterministic_for_seed() -> None:
     assert first.progress_distance_m != different.progress_distance_m
 
 
-@pytest.mark.parametrize("car_count", [4, 8])
+@pytest.mark.parametrize("car_count", [4, 8, 9, 10])
 @pytest.mark.parametrize("seed", [1, 110, 271])
 @pytest.mark.parametrize("race_index", [1, 2])
 def test_ordered_grid_runs_from_pole_to_back_across_track_wrap(car_count: int, seed: int, race_index: int) -> None:
-    # Allow the entire eight-car grid to fit before the start line.
+    # Allow the largest heat grid to fit before the start line.
     model = build_track_progress_model(
         tuple(TrackPoint(point.x * 4, point.z * 4) for point in square_track_model_points())
     )
@@ -82,6 +84,15 @@ def test_ordered_grid_runs_from_pole_to_back_across_track_wrap(car_count: int, s
     assert distances_to_line == sorted(distances_to_line)
     assert len(set(distances_to_line)) == car_count
     assert set(poses) == set(race_spawn_poses(car_count, model=model, random_seed=seed, race_index=race_index))
+    positions = [
+        race_track_position_m(
+            RaceCarRuntime(robot=Mock(), tracker=lap_progress_tracker_for_spawn_pose(model=model, spawn_pose=pose)),
+            start_finish_progress_m=start_finish.progress_distance_m,
+        )
+        for pose in poses
+    ]
+    assert positions == sorted(positions, reverse=True)
+    assert all(position < 0 for position in positions)
 
 
 def test_seeded_start_finish_pose_matches_front_spawn_progress() -> None:
@@ -179,6 +190,27 @@ def test_race_scored_distance_ignores_damage_and_applies_marshal_penalty() -> No
     )
 
     assert race_scored_distance_m(runtime) == 37.0
+
+
+def test_track_position_includes_grid_deficit_laps_and_reversing_without_score_penalties() -> None:
+    runtime = RaceCarRuntime(
+        robot=Mock(),
+        tracker=LapProgressTracker(total_length_m=100.0, starting_progress_distance_m=95.0),
+        marshal_penalty_m=50.0,
+    )
+    assert race_track_position_m(runtime, start_finish_progress_m=5.0) == -10.0
+    # Crossing the model's wrapped origin keeps continuous shared-line progress.
+    runtime.tracker.update(2.0, 1.0)
+    assert race_track_position_m(runtime, start_finish_progress_m=5.0) == -3.0
+    runtime.tracker.update(5.0, 2.0)
+    assert race_track_position_m(runtime, start_finish_progress_m=5.0) == 0.0
+    for seconds, progress in enumerate((35.0, 65.0, 95.0, 5.0), start=3):
+        runtime.tracker.update(progress, float(seconds))
+    assert race_track_position_m(runtime, start_finish_progress_m=5.0) == 100.0
+    runtime.tracker.update(2.0, 7.0)
+    assert race_track_position_m(runtime, start_finish_progress_m=5.0) == 97.0
+    assert runtime.tracker.best_distance_m == 110.0
+    assert race_scored_distance_m(runtime) == 60.0
 
 
 def test_race_progress_counts_while_car_is_touching_wall_and_another_car() -> None:
@@ -280,7 +312,11 @@ def test_car_contact_above_three_mph_decays_existing_stuck_time_without_marshall
         )
         assert (
             maybe_marshal_race_runtimes(
-                runtimes=(runtime,), projections=(projection,), recovery_config=config, delta_seconds=0.1
+                model=build_track_progress_model(square_track_model_points()),
+                runtimes=(runtime,),
+                projections=(projection,),
+                recovery_config=config,
+                delta_seconds=0.1,
             )
             == 0
         )
@@ -301,6 +337,7 @@ def test_marshal_still_recovers_stationary_slow_contact_wall_and_off_track_cars(
     config = RaceRecoveryConfig(stuck_seconds=2.0, distance_penalty_m=5.0, cooldown_seconds=2.0)
     reset = Mock()
     monkeypatch.setattr(race_runtime, "reset_robot_vehicle", reset)
+    monkeypatch.setattr(race_runtime, "vehicle_reset_pose_is_clear", Mock(return_value=True))
 
     update_race_runtime_after_step(
         runtime=runtime,
@@ -313,7 +350,11 @@ def test_marshal_still_recovers_stationary_slow_contact_wall_and_off_track_cars(
         delta_seconds=2.0,
     )
     marshalled = maybe_marshal_race_runtimes(
-        runtimes=(runtime,), projections=(projection,), recovery_config=config, delta_seconds=2.0
+        model=build_track_progress_model(square_track_model_points()),
+        runtimes=(runtime,),
+        projections=(projection,),
+        recovery_config=config,
+        delta_seconds=2.0,
     )
 
     assert marshalled == 1

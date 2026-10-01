@@ -5,6 +5,28 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any, cast
 
+from racing.race.timing import TimingStanding
+
+
+def split_follow_targets(
+    standings: tuple[TimingStanding, ...], selected_car_id: str | None = None,
+) -> tuple[str, str | None]:
+    """Pair the focused car with the next active car in lap-aware race order.
+
+    Automatic focus follows P1. If nobody trails the focus, use the nearest
+    active car ahead; with no competitor left, show only the focused car.
+    """
+    if not standings:
+        raise ValueError("split follow requires at least one car")
+    focus = next((row for row in standings if row.car_id == selected_car_id), None)
+    if focus is None:
+        focus = next((row for row in standings if not row.eliminated), standings[0])
+    index = standings.index(focus)
+    trailing = next((row for row in standings[index + 1:] if not row.eliminated), None)
+    if trailing is None:
+        trailing = next((row for row in reversed(standings[:index]) if not row.eliminated), None)
+    return focus.car_id, trailing.car_id if trailing is not None else None
+
 
 class SplitScreenCameras:
     """Split the scene into two views while leaving every UI region intact."""

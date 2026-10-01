@@ -934,6 +934,7 @@ def _run_headless_student_race(
             duration_seconds=round_seconds,
             fixed_delta_seconds=fixed_delta_seconds,
             recovery_config=_head_to_head_recovery_config(rules),
+            damage_enabled=rules.damage_enabled,
             sensor_sample_callback=sensor_sample_callback,
         )
         challenger_stats = head_to_head_team_stats_from_runtimes(
@@ -976,10 +977,15 @@ def _run_headless_student_runtime_for_duration(
     duration_seconds: float,
     fixed_delta_seconds: float,
     recovery_config: RaceRecoveryConfig | None,
+    damage_enabled: bool = True,
     sensor_sample_callback: Callable[[_RaceEntryT, RobotSensors], None] | None = None,
+    race_complete: Callable[[float], bool] | None = None,
 ) -> None:
     elapsed_seconds = 0.0
-    while elapsed_seconds < duration_seconds:
+    while True:
+        complete = race_complete(elapsed_seconds) if race_complete is not None else elapsed_seconds >= duration_seconds
+        if complete:
+            break
         projections = _run_headless_student_runtime_step(
             model=model,
             physics_world=physics_world,
@@ -989,10 +995,12 @@ def _run_headless_student_runtime_for_duration(
             runtimes=runtimes,
             elapsed_seconds=elapsed_seconds,
             fixed_delta_seconds=fixed_delta_seconds,
+            damage_enabled=damage_enabled,
             sensor_sample_callback=sensor_sample_callback,
         )
         if recovery_config is not None:
             maybe_marshal_race_runtimes(
+                model=model,
                 runtimes=runtimes,
                 projections=projections,
                 recovery_config=recovery_config,
@@ -1011,6 +1019,7 @@ def _run_headless_student_runtime_step(
     runtimes: tuple[RaceCarRuntime, ...],
     elapsed_seconds: float,
     fixed_delta_seconds: float,
+    damage_enabled: bool = True,
     sensor_sample_callback: Callable[[_RaceEntryT, RobotSensors], None] | None = None,
 ) -> tuple[TrackProjection, ...]:
     if not (len(entries) == len(controllers) == len(runtimes)):
@@ -1035,11 +1044,12 @@ def _run_headless_student_runtime_step(
     physics_scene.step(fixed_delta_seconds)
     next_elapsed_seconds = elapsed_seconds + fixed_delta_seconds
     contact_states = race_contact_states(physics_world=physics_world, runtimes=runtimes)
-    apply_wall_impact_damage(
-        physics_world=physics_world,
-        robots=tuple(runtime.robot for runtime in runtimes),
-        fixed_time_step=physics_scene.fixed_time_step,
-    )
+    if damage_enabled:
+        apply_wall_impact_damage(
+            physics_world=physics_world,
+            robots=tuple(runtime.robot for runtime in runtimes),
+            fixed_time_step=physics_scene.fixed_time_step,
+        )
     projections: list[TrackProjection] = []
     for runtime, contact_state in zip(runtimes, contact_states, strict=True):
         projection = project_track_position(model, robot_track_point(runtime.robot))

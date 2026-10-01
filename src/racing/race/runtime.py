@@ -16,6 +16,7 @@ from racing.physics import (
     apply_vehicle_command,
     restore_robot_vehicle,
     vehicle_collision_bounds,
+    vehicle_reset_pose_is_clear,
     vehicle_spawn_height,
 )
 from racing.race.progress import (
@@ -24,11 +25,12 @@ from racing.race.progress import (
     TrackProgressModel,
     TrackProjection,
     heading_error_degrees,
+    project_track_position,
     track_pose_at_distance,
 )
 from racing.race.sensors import RobotSensorBuilderState
 from racing.student.api import RobotCommand
-from racing.track.spatial import node_position, track_forward_vector, track_left_vector
+from racing.track.spatial import node_position, track_left_vector
 from racing.track.world import TRACK_WIDTH, TrackPoint
 
 DEFAULT_RACE_RANDOM_SEED = 110
@@ -40,6 +42,7 @@ RACE_GRID_LANE_OFFSET_FRACTION = 0.5
 RACE_GRID_CURVE_DIRECTION_THRESHOLD_DEGREES = 0.5
 RACE_MARSHAL_RESET_LANE_OFFSET_FRACTION = 0.5
 RACE_MARSHAL_RESET_LONGITUDINAL_SPACING_CAR_LENGTHS = 1.5
+RACE_MARSHAL_RESET_SEARCH_ROWS = 8
 RACE_OFF_TRACK_RESET_DISTANCE_M = TRACK_WIDTH / 2 + TRACK_EDGE_BUFFER
 RACE_MARSHAL_CAR_CONTACT_MAX_SPEED_MPS = 3.0 * 0.44704
 RACE_START_FINISH_AHEAD_CAR_LENGTHS = 2.0
@@ -262,12 +265,13 @@ def update_race_runtime_after_step(
 
 def maybe_marshal_race_runtimes(
     *,
+    model: TrackProgressModel,
     runtimes: tuple[RaceCarRuntime, ...],
     projections: tuple[TrackProjection, ...],
     recovery_config: RaceRecoveryConfig,
     delta_seconds: float,
 ) -> int:
-    """Marshal stuck or off-track cars back onto the racing line."""
+    """Marshal cars into clear track space, retrying later if it is occupied."""
     if len(runtimes) != len(projections):
         raise ValueError("runtimes and projections must have the same length")
     marshal_count = 0
@@ -281,21 +285,23 @@ def maybe_marshal_race_runtimes(
         if runtime.stuck_seconds < recovery_config.stuck_seconds and not off_track:
             continue
 
-        reset_robot_vehicle(
-            runtime.robot,
-            position=_marshal_reset_position(
-                runtime=runtime,
-                projection=projection,
-                runtime_index=runtime_index,
-                runtime_count=len(runtimes),
-            ),
-            heading_degrees=projection.heading_degrees,
+        reset_pose = _marshal_reset_pose(
+            model=model,
+            runtime=runtime,
+            projection=projection,
+            runtime_index=runtime_index,
+            runtimes=runtimes,
         )
+        if reset_pose is None:
+            continue
+        reset_robot_vehicle(runtime.robot, position=reset_pose.position, heading_degrees=reset_pose.heading_degrees)
         runtime.stuck_seconds = 0.0
         runtime.recent_progress_mps = 0.0
         runtime.contact_state = RaceContactState()
         runtime.sensor_state = sensor_state_after_runtime_reset(
-            runtime=runtime, projection=projection, time_s=runtime.sensor_state.time_s
+            runtime=runtime,
+            projection=project_track_position(model, TrackPoint(reset_pose.position[0], reset_pose.position[2])),
+            time_s=runtime.sensor_state.time_s,
         )
         runtime.marshal_count += 1
         runtime.marshal_penalty_m += recovery_config.distance_penalty_m
@@ -313,7 +319,7 @@ def sensor_state_after_runtime_reset(
     """Reset sensor bookkeeping after the marshal moves a car."""
     return RobotSensorBuilderState(
         time_s=time_s,
-        position=projection.nearest_center,
+        position=projection.position,
         heading_degrees=projection.heading_degrees,
         speed_mps=0.0,
         distance_m=runtime.sensor_state.distance_m,
@@ -337,6 +343,19 @@ def robot_score_damage(robot: RobotVehicle) -> float:
 def race_scored_distance_m(runtime: RaceCarRuntime) -> float:
     """Return distance progress after marshal penalties, independent of damage."""
     return max(0.0, runtime.tracker.best_distance_m - runtime.marshal_penalty_m)
+
+
+def race_track_position_m(runtime: RaceCarRuntime, *, start_finish_progress_m: float) -> float:
+    """Current lap-aware position from the shared line, including the grid offset.
+
+    Cars start a negative distance behind the line. Signed progress preserves
+    reversing and completed laps instead of measuring each car's best journey.
+    """
+    tracker = runtime.tracker
+    if tracker.starting_progress_distance_m is None:
+        raise ValueError("track position requires an initialized starting progress")
+    grid_offset = -((start_finish_progress_m - tracker.starting_progress_distance_m) % tracker.total_length_m)
+    return grid_offset + tracker.unwrapped_progress_distance_m
 
 
 def robot_is_eliminated(robot: RobotVehicle) -> bool:
@@ -368,11 +387,14 @@ def reset_robot_vehicle(
         body.setAngularVelocity(core.Vec3(0.0, 0.0, 0.0))
     if hasattr(body, "clearForces"):
         body.clearForces()
+    if hasattr(body, "resetPrevTransform"):
+        body.resetPrevTransform()
     if hasattr(body, "setActive"):
         body.setActive(True)
     if hasattr(robot.vehicle, "resetSuspension"):
         robot.vehicle.resetSuspension()
     robot.pending_drive_direction = 0
+    robot.pre_step_linear_velocity_mps = None
     apply_vehicle_command(vehicle=robot.vehicle, command=RobotCommand(), config=robot.config)
 
 
@@ -423,18 +445,16 @@ def _race_spawn_pose_at_grid_slot(*, track_pose: TrackPose, lateral_offset: floa
     )
 
 
-def _marshal_reset_position(
+def _marshal_reset_pose(
     *,
+    model: TrackProgressModel,
     runtime: RaceCarRuntime,
     projection: TrackProjection,
     runtime_index: int,
-    runtime_count: int,
-) -> tuple[float, float, float]:
+    runtimes: tuple[RaceCarRuntime, ...],
+) -> RaceSpawnPose | None:
     config = runtime.robot.config
     spawn_y = vehicle_spawn_height(config, surface_y=TRACK_SURFACE_Y)
-    if runtime_count <= 1:
-        return (projection.nearest_center.x, spawn_y, projection.nearest_center.z)
-
     safe_half_width = max(
         0.0,
         TRACK_WIDTH / 2
@@ -443,16 +463,29 @@ def _marshal_reset_position(
     )
     side = -1.0 if runtime_index % 2 == 0 else 1.0
     lateral_offset_m = side * safe_half_width * RACE_MARSHAL_RESET_LANE_OFFSET_FRACTION
-    row_index = runtime_index // 2
+    lateral_offsets = (lateral_offset_m, -lateral_offset_m, 0.0)
+    if len(runtimes) == 1:
+        lateral_offsets = (0.0, lateral_offset_m, -lateral_offset_m)
     car_length_m = vehicle_collision_bounds(config).half_length * 2.0
-    longitudinal_offset_m = -row_index * car_length_m * RACE_MARSHAL_RESET_LONGITUDINAL_SPACING_CAR_LENGTHS
-    forward_x, forward_z = track_forward_vector(projection.heading_degrees)
-    left_x, left_z = track_left_vector(projection.heading_degrees)
-    return (
-        projection.nearest_center.x + left_x * lateral_offset_m + forward_x * longitudinal_offset_m,
-        spawn_y,
-        projection.nearest_center.z + left_z * lateral_offset_m + forward_z * longitudinal_offset_m,
-    )
+    spacing_m = car_length_m * RACE_MARSHAL_RESET_LONGITUDINAL_SPACING_CAR_LENGTHS
+    other_robots = tuple(other.robot for other in runtimes if other is not runtime)
+    for row_index in range(RACE_MARSHAL_RESET_SEARCH_ROWS):
+        setback_m = row_index * spacing_m
+        # Search backward along the centerline, including bends and the wrapped
+        # start line. Keep the move local so lap bookkeeping sees a backward move.
+        if setback_m > model.total_length_m / 4:
+            break
+        track_pose = track_pose_at_distance(model, projection.progress_distance_m - setback_m)
+        for lateral_offset in lateral_offsets:
+            pose = _race_spawn_pose_at_grid_slot(track_pose=track_pose, lateral_offset=lateral_offset, spawn_y=spawn_y)
+            if vehicle_reset_pose_is_clear(
+                robot=runtime.robot,
+                position=pose.position,
+                heading_degrees=pose.heading_degrees,
+                other_robots=other_robots,
+            ):
+                return pose
+    return None
 
 
 def _track_projection_is_off_track(projection: TrackProjection) -> bool:

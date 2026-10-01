@@ -32,7 +32,7 @@ def heat_modules(tmp_path: Path, request: pytest.FixtureRequest) -> list[str]:
     return args
 
 
-@pytest.mark.parametrize("heat_modules", [4, 8], indirect=True)
+@pytest.mark.parametrize("heat_modules", [2, 3, 4, 7, 8, 9, 10], indirect=True)
 def test_headless_heat_loads_independent_controllers_and_forwards_race_settings(
     heat_modules: list[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -90,7 +90,7 @@ def test_headless_heat_loads_independent_controllers_and_forwards_race_settings(
     assert json.loads(capsys.readouterr().out) == FakeResult().to_dict()
 
 
-@pytest.mark.parametrize("heat_modules", [4, 8], indirect=True)
+@pytest.mark.parametrize("heat_modules", [2, 3, 4, 7, 8, 9, 10], indirect=True)
 def test_watched_heat_applies_names_camera_window_and_audio_settings(
     heat_modules: list[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -157,7 +157,7 @@ def test_watched_heat_applies_names_camera_window_and_audio_settings(
 @pytest.mark.parametrize(
     ("args", "message"),
     [
-        (["--module", "missing.py"], "heat requires exactly four or eight --module arguments"),
+        (["--module", "missing.py"], "heat requires two to ten --module arguments"),
         (["--name", "First"], "--name must be repeated 4 times"),
         (["--fallback-name", "First"], "--fallback-name must be repeated 4 times"),
         (["--watch", "--json"], "--json is only available for headless heats"),
@@ -176,30 +176,32 @@ def test_invalid_heat_arguments_fail_before_loading_modules(
     assert message in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("entrant_count", [2, 5, 7, 9])
+@pytest.mark.parametrize("entrant_count", [1, 11])
 def test_heat_rejects_unsupported_entrant_counts(entrant_count: int, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as error:
         cli.main(["heat", *(["--module", "missing.py"] * entrant_count)])
 
     assert error.value.code == 2
-    assert "heat requires exactly four or eight --module arguments" in capsys.readouterr().err
+    assert "heat requires two to ten --module arguments" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("flag", ["--name", "--fallback-name"])
-def test_eight_car_heat_requires_eight_names_when_provided(flag: str, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("entrant_count", [8, 9])
+def test_larger_heats_require_one_name_per_car_when_provided(
+    flag: str, entrant_count: int, capsys: pytest.CaptureFixture[str]
+) -> None:
     with pytest.raises(SystemExit) as error:
-        cli.main(["heat", *(["--module", "missing.py"] * 8), *([flag, "Named"] * 4)])
+        cli.main(["heat", *(["--module", "missing.py"] * entrant_count), *([flag, "Named"] * 4)])
 
     assert error.value.code == 2
-    assert f"{flag} must be repeated 8 times" in capsys.readouterr().err
+    assert f"{flag} must be repeated {entrant_count} times" in capsys.readouterr().err
 
 
-def test_heat_rejects_split_follow_camera(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as error:
-        cli.build_argument_parser().parse_args(["heat", *(["--module", "missing.py"] * 4), "--camera", "split_follow"])
-
-    assert error.value.code == 2
-    assert "invalid choice: 'split_follow'" in capsys.readouterr().err
+def test_heat_accepts_split_follow_camera() -> None:
+    args = cli.build_argument_parser().parse_args(
+        ["heat", *(["--module", "missing.py"] * 4), "--camera", "split_follow"],
+    )
+    assert args.camera == CameraView.SPLIT_FOLLOW.value
 
 
 @pytest.mark.parametrize("option", [["--scoring", "best-copy"], ["--win-margin-m", "2"]])
@@ -217,6 +219,55 @@ def test_heat_defaults_to_shared_three_quarter_camera_and_accepts_global_seed() 
     assert args.camera == "three_quarter"
     assert args.seed == 110
     assert args.watch is False
+
+
+@pytest.mark.parametrize("watch", [False, True])
+@pytest.mark.parametrize("timeout", [None, 0.0, 7.5])
+def test_lap_limit_is_forwarded_to_both_heat_runners(
+    heat_modules: list[str], monkeypatch: pytest.MonkeyPatch, watch: bool, timeout: float | None
+) -> None:
+    from unittest.mock import Mock
+
+    headless, viewer = Mock(), Mock()
+    monkeypatch.setattr(cli, "run_headless_heat", headless)
+    monkeypatch.setattr(cli, "create_heat_viewer_app", viewer)
+    monkeypatch.setattr(cli, "format_heat_result", Mock(return_value="results"))
+    timeout_args = [] if timeout is None else ["--finish-timeout-seconds", str(timeout)]
+    cli.main(["heat", *heat_modules, "--round-laps", "3", *timeout_args, *(["--watch"] if watch else [])])
+
+    if watch:
+        assert viewer.call_args.args[0].round_laps == 3
+        assert viewer.call_args.args[0].finish_timeout_seconds == (20.0 if timeout is None else timeout)
+    else:
+        assert headless.call_args.kwargs["round_laps"] == 3
+        assert headless.call_args.kwargs["finish_timeout_seconds"] == (20.0 if timeout is None else timeout)
+
+
+@pytest.mark.parametrize("timeout", ["-1", "nan", "inf", "-inf"])
+def test_invalid_finish_timeouts_fail_before_loading_controllers(
+    timeout: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(
+            ["heat", *(["--module", "missing.py"] * 4), "--round-laps", "3", f"--finish-timeout-seconds={timeout}"]
+        )
+    assert error.value.code == 2
+    assert "--finish-timeout-seconds must be finite and nonnegative" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "length_args",
+    [
+        ["--round-laps", "0"],
+        ["--round-laps", "-1"],
+        ["--round-laps", "1.5"],
+        ["--round-laps", "3", "--round-seconds", "60"],
+    ],
+)
+def test_invalid_lap_limits_fail_before_loading_controllers(length_args: list[str]) -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(["heat", *(["--module", "missing.py"] * 4), *length_args])
+    assert error.value.code == 2
 
 
 def test_headless_heat_formats_terminal_results(

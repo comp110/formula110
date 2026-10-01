@@ -31,7 +31,7 @@ def build_config() -> dict[str, object]:
             "distance_penalty_m": 5.0,
             "cooldown_seconds": 2.0,
         },
-        "rubric": {"completion_with_forward_progress": 100.0},
+        "rubric": {"event_qualification": 100.0},
     }
 
 

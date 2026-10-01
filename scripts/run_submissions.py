@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Race two, four, or eight submissions from an extracted Gradescope assignment export."""
+"""Race two to ten submissions from an extracted Gradescope assignment export."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
+
+import yaml
 
 from racing.game import cli
 from racing.race.heat import HEAT_ENTRANT_COUNTS
@@ -92,9 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--track-seed INT generates a reproducible procedural track."
         ),
     )
-    parser.add_argument(
-        "submissions", type=submission_id, nargs="+", metavar="ID", help="two, four, or eight submission IDs"
-    )
+    parser.add_argument("submissions", type=submission_id, nargs="+", metavar="ID", help="two to ten submission IDs")
     parser.add_argument(
         "--export-dir",
         type=Path,
@@ -108,11 +108,48 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="INT|random",
         help=f"starting-position seed (also grid order in h2h), or 'random' (default: {DEFAULT_RACE_RANDOM_SEED})",
     )
-    parser.add_argument("--headless", action="store_true", help="run without the default watched three-quarter view")
+    parser.add_argument("--headless", action="store_true", help="run without the default watched cinematic view")
+    parser.add_argument("--heat", action="store_true", help="use individual heat rules for a two-car field as well")
+    parser.add_argument("--title", help="race title shown in the window and on the starting grid")
+    parser.add_argument(
+        "--allow-student-prints", action="store_true", help="keep controller print calls (skipped by default)"
+    )
     parser.add_argument(
         "--dry-run", action="store_true", help="print the resolved race command without loading controllers"
     )
     return parser
+
+
+def participant_names(export_dir: Path, identifiers: Sequence[str]) -> list[str]:
+    """Read all partners from Gradescope, retaining first names and last initials."""
+    metadata = export_dir / "submission_metadata.yml"
+    if not metadata.is_file():
+        return [f"#{identifier}" for identifier in identifiers]
+    try:
+        payload: object = yaml.safe_load(metadata.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as error:
+        raise ValueError(f"could not read {metadata}: {error}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"{metadata}: expected a mapping of submission_ID records")
+    records = cast(dict[str, object], payload)
+    labels: list[str] = []
+    for identifier in identifiers:
+        record = records.get(f"submission_{identifier}")
+        names: list[str] = []
+        if isinstance(record, dict):
+            submission = cast(dict[str, object], record)
+            submitters = submission.get(":submitters", submission.get("submitters"))
+            if isinstance(submitters, list):
+                for raw in cast(list[object], submitters):
+                    submitter = cast(dict[str, object], raw) if isinstance(raw, dict) else {}
+                    name = submitter.get(":name", submitter.get("name"))
+                    parts = name.split() if isinstance(name, str) else []
+                    if parts:
+                        names.append(f"{parts[0]} {parts[-1][0]}." if len(parts) > 1 else parts[0])
+                    else:
+                        names.append(f"#{identifier}")
+        labels.append(" & ".join(names) if names else f"#{identifier}")
+    return labels
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -121,16 +158,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     if extra[:1] == ["--"]:
         extra = extra[1:]
     identifiers = cast(list[str], args.submissions)
-    if len(identifiers) not in (2, *HEAT_ENTRANT_COUNTS):
-        parser.error("provide exactly two IDs for head-to-head or four or eight IDs for a heat")
-    if len(identifiers) in HEAT_ENTRANT_COUNTS and len(set(identifiers)) != len(identifiers):
+    if len(identifiers) not in HEAT_ENTRANT_COUNTS:
+        parser.error("provide two to ten submission IDs")
+    is_heat = args.heat or len(identifiers) != 2
+    if is_heat and len(set(identifiers)) != len(identifiers):
         parser.error(f"a {len(identifiers)}-car heat requires {len(identifiers)} distinct submission IDs")
     try:
         controllers = [resolve_controller(args.export_dir.expanduser(), identifier) for identifier in identifiers]
+        grid_names = participant_names(args.export_dir.expanduser(), identifiers) if not args.headless else []
     except ValueError as error:
         parser.error(str(error))
 
-    if len(identifiers) == 2:
+    if not is_heat:
         runner_args = [
             "h2h",
             "--challenger-module",
@@ -151,16 +190,22 @@ def main(argv: Sequence[str] | None = None) -> None:
             "--seed",
             str(args.seed),
             "--camera",
-            "three_quarter",
+            "cinematic",
         ]
     )
     if not args.headless:
-        runner_args.append("--watch")
+        runner_args.extend(["--watch", "--starting-grid"])
+        for name in grid_names:
+            runner_args.extend(["--grid-name", name])
+    if not args.allow_student_prints:
+        runner_args.append("--suppress-student-prints")
+    if args.title:
+        runner_args.extend(["--title", args.title])
     runner_args.extend(extra)
     race_args = cli.build_argument_parser().parse_args(runner_args)
 
     for index, (identifier, controller) in enumerate(zip(identifiers, controllers, strict=True)):
-        role = ("Challenger", "Incumbent ")[index] if len(identifiers) == 2 else f"Entrant {index + 1}"
+        role = f"Entrant {index + 1}" if is_heat else ("Challenger", "Incumbent ")[index]
         print(f"{role} #{identifier}: {controller}", file=sys.stderr)
     print(f"Seed: {race_args.seed} (reuse with --seed {race_args.seed})", file=sys.stderr)
     if args.dry_run:

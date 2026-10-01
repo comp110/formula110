@@ -22,6 +22,7 @@ class HeadToHeadRaceRules:
     marshal_stuck_seconds: float = 1.5
     marshal_penalty_m: float = 5.0
     marshal_cooldown_seconds: float = 2.0
+    damage_enabled: bool = True
 
     def __post_init__(self) -> None:
         if self.scoring not in ("best-copy", "team-sum"):
@@ -44,6 +45,7 @@ class HeadToHeadRaceRules:
             "marshal_stuck_seconds": self.marshal_stuck_seconds,
             "marshal_penalty_m": self.marshal_penalty_m,
             "marshal_cooldown_seconds": self.marshal_cooldown_seconds,
+            "damage_enabled": self.damage_enabled,
         }
 
     def to_json(self) -> dict[str, object]:

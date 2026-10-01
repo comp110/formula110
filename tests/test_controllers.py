@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,57 @@ def test_load_student_controller_from_file(tmp_path: Path) -> None:
     controller = load_student_controller(module_path, function_name="drive")
 
     assert controller(RobotSensors()) == RobotCommand(throttle=0.25, steer=0.5)
+
+
+@pytest.mark.parametrize("import_by_name", [False, True])
+def test_suppress_prints_skips_arguments_and_preserves_controller_behavior(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    import_by_name: bool,
+) -> None:
+    module_path = tmp_path / "quiet_student_driver.py"
+    source = (
+        "from racing import RobotCommand\n"
+        "print('import', 1 / 0)\n"
+        "def create_controller():\n"
+        "    print('factory', 1 / 0)\n"
+        "    def control(sensors):\n"
+        "        if sensors.tick == 0:\n"
+        "            print(\n"
+        "                'debug', 1 / 0,\n"
+        "            )\n"
+        "        return RobotCommand(throttle=0.25, steer=0.5)\n"
+        "    return control\n"
+    )
+    module_path.write_text(source, encoding="utf-8")
+    monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
+    controller = load_student_controller(module_path.stem if import_by_name else module_path, suppress_prints=True)
+
+    assert controller(RobotSensors()) == RobotCommand(throttle=0.25, steer=0.5)
+    assert controller_for_copy(controller)(RobotSensors()) == RobotCommand(throttle=0.25, steer=0.5)
+    assert capsys.readouterr().out == ""
+    assert module_path.read_text(encoding="utf-8") == source
+
+
+def test_suppression_ignores_cached_bytecode_and_does_not_affect_normal_loading(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module_path = tmp_path / "noisy_student_driver.py"
+    module_path.write_text(
+        "from racing import RobotCommand\n"
+        "print('import')\n"
+        "def control(sensors):\n"
+        "    print('tick')\n"
+        "    return RobotCommand()\n",
+        encoding="utf-8",
+    )
+    for suppress_prints in (False, True, False):
+        controller = load_student_controller(module_path, suppress_prints=suppress_prints)
+        assert controller(RobotSensors()) == RobotCommand()
+        print("race output")
+        expected = "race output\n" if suppress_prints else "import\ntick\nrace output\n"
+        assert capsys.readouterr().out == expected
 
 
 def test_controller_factory_creates_independent_state_for_each_car(tmp_path: Path) -> None:

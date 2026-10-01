@@ -15,6 +15,7 @@ from racing.graphics.colors import (
     ColorRGBA,
 )
 from racing.race.heat import HeatEntrant
+from racing.race.laps import DEFAULT_FINISH_TIMEOUT_SECONDS
 from racing.race.rules import HeadToHeadRaceRules
 from racing.race.runtime import DEFAULT_RACE_RANDOM_SEED
 from racing.student.api import RobotController
@@ -29,6 +30,8 @@ class CameraView(Enum):
     TOP_DOWN = "top_down"
     THREE_QUARTER = "three_quarter"
     DRONE = "drone"
+    HELICOPTER = "helicopter"
+    CINEMATIC = "cinematic"
     FOLLOW = "follow"
     FOLLOW_CAR = "follow_car"
     SPLIT_FOLLOW = "split_follow"
@@ -104,6 +107,8 @@ class HeadToHeadViewerConfig:
     camera_view: CameraView = CameraView.DRONE
     challenger_name: str = "challenger"
     incumbent_name: str = "incumbent"
+    starting_grid: bool = False
+    grid_names: tuple[str, ...] = ()
     challenger_controller: RobotController | None = None
     incumbent_controller: RobotController | None = None
     challenger_keyboard: bool = False
@@ -126,9 +131,11 @@ class HeadToHeadViewerConfig:
 
 @dataclass(frozen=True, slots=True)
 class HeatViewerConfig:
-    """Settings for a four- or eight-controller race with individual standings."""
+    """Settings for a four-, eight-, or nine-controller race with individual standings."""
 
     entrants: tuple[HeatEntrant, ...] = ()
+    starting_grid: bool = False
+    grid_names: tuple[str, ...] = ()
     title: str = "Racing Heat"
     borderless: bool = False
     fullscreen: bool = False
@@ -138,6 +145,8 @@ class HeatViewerConfig:
     camera_view: CameraView = CameraView.THREE_QUARTER
     race_count: int = 1
     round_seconds: float = DEFAULT_RACE_SECONDS
+    round_laps: int | None = None
+    finish_timeout_seconds: float = DEFAULT_FINISH_TIMEOUT_SECONDS
     random_seed: int = DEFAULT_RACE_RANDOM_SEED
     track_id: str = TRACK_ID_MUGELLO_SHORT
     track_seed: int | None = None

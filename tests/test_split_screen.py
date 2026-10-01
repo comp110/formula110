@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from racing.game import cli
-from racing.game.app import _head_to_head_split_target_runtimes, build_scene  # pyright: ignore[reportPrivateUsage]
+from racing.game.app import build_scene
 from racing.game.config import CameraView, GameConfig, HeadToHeadViewerConfig
 from racing.graphics.camera import (
     FORMULA_FOLLOW_CAMERA_SETTINGS,
@@ -17,9 +17,8 @@ from racing.graphics.camera import (
     next_camera_view,
     update_camera_cycle,
 )
-from racing.graphics.split_screen import SplitScreenCameras
-from racing.race.head_to_head import head_to_head_race_entries
-from racing.race.runtime import RaceCarRuntime
+from racing.graphics.split_screen import SplitScreenCameras, split_follow_targets
+from racing.race.timing import TimingStanding
 
 
 def test_split_camera_cycles_on_a_new_key_press_and_resets_follow_history() -> None:
@@ -53,23 +52,50 @@ def test_split_camera_cli_dispatches_to_watched_head_to_head(monkeypatch: pytest
     viewer.run.assert_called_once_with()
 
 
-def test_split_camera_requires_head_to_head_viewer() -> None:
+def test_split_camera_requires_a_race_viewer() -> None:
     with pytest.raises(SystemExit):
         cli.build_argument_parser().parse_args(["--camera", "split_follow"])
     with pytest.raises(ValueError, match="requires the head-to-head viewer"):
         build_scene(GameConfig(camera_view=CameraView.SPLIT_FOLLOW))
 
 
-@pytest.mark.parametrize("race_index", [1, 2, 3, 4])
-def test_split_camera_targets_stay_with_copy_zero_of_each_team(race_index: int) -> None:
-    entries = head_to_head_race_entries(race_index=race_index, random_seed=110, challenger_copies=3, incumbent_copies=2)
-    runtimes = tuple(cast(RaceCarRuntime, SimpleNamespace()) for _ in entries)
-    expected = {(entry.role, entry.copy_index): runtime for entry, runtime in zip(entries, runtimes, strict=True)}
+def _standings(*ids: str, out: tuple[str, ...] = ()) -> tuple[TimingStanding, ...]:
+    return tuple(TimingStanding(index, car_id, 500 - index * 110, None, eliminated=car_id in out)
+                 for index, car_id in enumerate(ids, start=1))
 
-    challenger, incumbent = _head_to_head_split_target_runtimes(entries=entries, runtimes=runtimes)
 
-    assert challenger is expected["challenger", 0]
-    assert incumbent is expected["incumbent", 0]
+@pytest.mark.parametrize("ids", [("heat-2:0", "heat-0:0", "heat-1:0"),
+                                ("incumbent:1", "challenger:2", "incumbent:0")])
+def test_split_camera_uses_race_order_and_preserves_selected_copy(ids: tuple[str, str, str]) -> None:
+    standings = _standings(*ids)
+    assert split_follow_targets(standings) == ids[:2]
+    assert split_follow_targets(standings, ids[1]) == ids[1:]
+
+
+def test_split_focus_stays_with_car_and_trailer_updates_after_overtakes() -> None:
+    assert split_follow_targets(_standings("a", "b", "c", "d"), "b") == ("b", "c")
+    assert split_follow_targets(_standings("a", "b", "d", "c"), "b") == ("b", "d")
+    assert split_follow_targets(_standings("a", "d", "b", "c"), "b") == ("b", "c")
+
+
+def test_split_skips_retired_and_dnf_competitors_and_falls_back_to_car_ahead() -> None:
+    assert split_follow_targets(_standings("a", "b", "c", out=("b",)), "a") == ("a", "c")
+    assert split_follow_targets(_standings("a", "b", "c"), "c") == ("c", "b")
+    assert split_follow_targets(_standings("a", "b", "c", out=("b",)), "c") == ("c", "a")
+
+
+def test_split_auto_uses_active_leader_and_handles_one_remaining_car() -> None:
+    standings = _standings("a", "b", "c", out=("a",))
+    assert split_follow_targets(standings) == ("b", "c")
+    assert split_follow_targets(standings, "missing") == ("b", "c")
+    assert split_follow_targets(_standings("a", "b", out=("b",))) == ("a", None)
+    assert split_follow_targets(_standings("a", "b", out=("a", "b"))) == ("a", None)
+
+
+def test_split_manual_retired_focus_stays_selected_until_auto() -> None:
+    standings = _standings("a", "b", "c", out=("c",))
+    assert split_follow_targets(standings, "c") == ("c", "b")
+    assert split_follow_targets(standings) == ("a", "b")
 
 
 def test_follow_cameras_keep_independent_target_history_and_poses() -> None:

@@ -70,18 +70,32 @@ def commands(output: str) -> list[list[str]]:
     return [shlex.split(line) for line in output.splitlines() if line and not line.startswith("#")]
 
 
+@pytest.mark.parametrize("entrant_count", [8, 9, 10])
 def test_current_scores_rank_in_both_directions_and_commands_resolve_without_loading_code(
-    generator: ModuleType, exported_leaders: Path, capsys: pytest.CaptureFixture[str]
+    generator: ModuleType, exported_leaders: Path, capsys: pytest.CaptureFixture[str], entrant_count: int
 ) -> None:
-    generator.main(["--export-dir", str(exported_leaders), "--", "--seed", "110", "--fullscreen", "--races", "3"])
+    generator.main(
+        [
+            "--export-dir",
+            str(exported_leaders),
+            "--cars", str(entrant_count),
+            "--",
+            "--seed",
+            "110",
+            "--fullscreen",
+            "--races",
+            "3",
+        ]
+    )
     output = capsys.readouterr()
     assert not output.err
     printed = commands(output.out)
     assert len(printed) == 2
-    for command, expected in zip(printed, [list(range(1, 9)), list(range(10, 2, -1))], strict=True):
+    expected_orders = [list(range(1, entrant_count + 1)), list(range(10, 10 - entrant_count, -1))]
+    for command, expected in zip(printed, expected_orders, strict=True):
         script_index = command.index("python") + 1
-        assert command[script_index + 1 : script_index + 9] == [str(i) for i in expected]
-        assert command.count("--name") == 8
+        assert command[script_index + 1 : script_index + 1 + entrant_count] == [str(i) for i in expected]
+        assert command.count("--name") == entrant_count
         names = [command[i + 1] for i, arg in enumerate(command) if arg == "--name"]
         assert names == ["KJ+MJ" if i % 2 == 0 else "KJ" for i in expected]
         assert "Driver's" not in output.out
@@ -94,12 +108,27 @@ def test_current_scores_rank_in_both_directions_and_commands_resolve_without_loa
             check=True,
         )
         resolved = shlex.split(result.stdout)
-        assert resolved.count("--module") == 8
+        assert resolved.count("--module") == entrant_count
         assert "--fullscreen" in resolved
         assert resolved[resolved.index("--races") + 1] == "3"
         assert resolved[resolved.index("--seed") + 1] == "110"
     assert "# 1." in output.out
     assert "999" not in output.out
+
+
+@pytest.mark.parametrize("available", [8, 9, 10])
+def test_default_heat_uses_up_to_ten_eligible_cars(
+    generator: ModuleType, exported_leaders: Path, capsys: pytest.CaptureFixture[str], available: int,
+) -> None:
+    metadata = exported_leaders / "submission_metadata.yml"
+    payload = yaml.safe_load(metadata.read_text())
+    for identifier in range(available + 1, 11):
+        del payload[f"submission_{identifier}"]
+    write_metadata(exported_leaders, payload)
+    generator.main(["--export-dir", str(exported_leaders)])
+    printed = commands(capsys.readouterr().out)
+    assert len(printed) == 2
+    assert all(command.count("--name") == available for command in printed)
 
 
 def test_missing_scores_and_controllers_are_excluded_and_numeric_ties_are_stable(

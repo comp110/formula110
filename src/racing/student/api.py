@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from hashlib import blake2s
 from importlib import import_module, util
+from importlib.machinery import ModuleSpec
 from math import isfinite
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Protocol, cast
 
+from racing.student.controller_imports import controller_module_spec
 from racing.track.world import clamp
 
 ColorRGBA = tuple[float, float, float, float]
@@ -343,15 +346,19 @@ def load_student_controller(
     module_reference: str | Path,
     *,
     function_name: str = "control",
+    suppress_prints: bool = False,
 ) -> RobotController:
     """Load a student controller function from a module path or import name."""
-    return load_student_submission(module_reference, function_name=function_name).controller
+    return load_student_submission(
+        module_reference, function_name=function_name, suppress_prints=suppress_prints
+    ).controller
 
 
 def load_student_submission(
     module_reference: str | Path,
     *,
     function_name: str = "control",
+    suppress_prints: bool = False,
 ) -> StudentControllerSubmission:
     """Load a controller and optional ``RACING_NAME``/``RACING_COLOR`` metadata.
 
@@ -359,11 +366,14 @@ def load_student_submission(
     ``control`` function name. The factory lets every car and repeated race get
     independent mutable controller state. Modules without a factory retain the
     original function-based ``control(sensors)`` interface.
+
+    With ``suppress_prints``, direct ``print(...)`` calls in this module are
+    skipped, including their arguments, without editing the source file.
     """
     if not function_name:
         raise ValueError("student control function name cannot be empty")
 
-    module = _load_student_module(module_reference)
+    module = _load_student_module(module_reference, suppress_prints=suppress_prints)
     return StudentControllerSubmission(
         controller=_student_controller_from_module(module=module, function_name=function_name),
         display_name=_student_display_name(module),
@@ -521,10 +531,24 @@ def _color_from_channels(channels: tuple[float, ...] | list[float]) -> ColorRGBA
     return (channels[0], channels[1], channels[2], channels[3])
 
 
-def _load_student_module(module_reference: str | Path) -> ModuleType:
+class _SkipPrintCalls(ast.NodeTransformer):
+    """Skip debug output without evaluating arguments or leaving empty blocks."""
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        if isinstance(node.func, ast.Name) and node.func.id == "print":
+            return ast.copy_location(ast.Constant(value=None), node)
+        return self.generic_visit(node)
+
+
+def _load_student_module(module_reference: str | Path, *, suppress_prints: bool = False) -> ModuleType:
     reference_text = str(module_reference)
     if _looks_like_file_reference(reference_text):
-        return _load_student_module_from_path(Path(reference_text))
+        return _load_student_module_from_path(Path(reference_text), suppress_prints=suppress_prints)
+    if suppress_prints:
+        spec = util.find_spec(reference_text)
+        if spec is None:
+            raise ImportError(f"could not find student module {reference_text!r}")
+        return _execute_student_module(spec, suppress_prints=True)
     return import_module(reference_text)
 
 
@@ -532,24 +556,44 @@ def _looks_like_file_reference(reference_text: str) -> bool:
     return reference_text.endswith(".py") or "/" in reference_text or "\\" in reference_text
 
 
-def _load_student_module_from_path(path: Path) -> ModuleType:
-    module_path = path.expanduser()
-    if not module_path.is_absolute():
-        module_path = Path.cwd() / module_path
+def _load_student_module_from_path(path: Path, *, suppress_prints: bool = False) -> ModuleType:
+    module_path = path.expanduser().resolve()
     if not module_path.is_file():
         raise FileNotFoundError(f"student module file does not exist: {module_path}")
 
-    module_directory = str(module_path.parent)
-    if module_directory not in sys.path:
-        sys.path.insert(0, module_directory)
-
-    spec = util.spec_from_file_location(_student_module_name(module_path), module_path)
+    spec = controller_module_spec(module_path, _student_module_name(module_path))
+    if spec is None:
+        module_directory = str(module_path.parent)
+        if module_directory not in sys.path:
+            sys.path.insert(0, module_directory)
+        spec = util.spec_from_file_location(_student_module_name(module_path), module_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"could not load student module from {module_path}")
 
+    module = _execute_student_module(spec, suppress_prints=suppress_prints)
+    parent_name, _, child_name = spec.name.rpartition(".")
+    if parent_name:
+        setattr(sys.modules[parent_name], child_name, module)
+    return module
+
+
+def _execute_student_module(spec: ModuleSpec, *, suppress_prints: bool) -> ModuleType:
+    loader = cast(Any, spec.loader)
+    code = None
+    if suppress_prints:
+        source = loader.get_source(spec.name)
+        if source is None:
+            raise ImportError(f"cannot suppress prints without Python source for {spec.name!r}")
+        filename = spec.origin or spec.name
+        tree = _SkipPrintCalls().visit(ast.parse(source, filename=filename))
+        code = compile(ast.fix_missing_locations(tree), filename, "exec", dont_inherit=True)
+
     module = util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    cast(Any, spec.loader).exec_module(module)
+    if code is not None:
+        exec(code, module.__dict__)
+    else:
+        loader.exec_module(module)
     return module
 
 

@@ -38,7 +38,7 @@ def _heat_entrants(entrant_count: int = 4) -> tuple[HeatEntrant, ...]:
     )
 
 
-@pytest.mark.parametrize("entrant_count", [4, 8])
+@pytest.mark.parametrize("entrant_count", [2, 3, 4, 7, 8, 9, 10])
 def test_heat_viewer_preserves_grid_order_and_entrant_metadata(entrant_count: int) -> None:
     config = HeatViewerConfig(entrants=_heat_entrants(entrant_count), random_seed=110)
     orders: set[tuple[int, ...]] = set()
@@ -84,7 +84,7 @@ def test_retired_car_badge_hides_without_projection_and_returns_after_reset(monk
     text.show.assert_called_once()
 
 
-@pytest.mark.parametrize("entrant_count", [4, 8])
+@pytest.mark.parametrize("entrant_count", [2, 3, 4, 7, 8, 9, 10])
 def test_heat_viewer_recreates_factory_controller_state_for_each_car_and_race(
     tmp_path: Path, entrant_count: int
 ) -> None:
@@ -120,7 +120,7 @@ def test_heat_viewer_recreates_factory_controller_state_for_each_car_and_race(
     assert len({id(controller) for controller in (*first, *second, prototype)}) == 2 * entrant_count + 1
 
 
-@pytest.mark.parametrize("entrant_count", [0, 1, 3, 5, 9])
+@pytest.mark.parametrize("entrant_count", [0, 1, 11])
 def test_heat_viewer_rejects_wrong_entrant_count_before_graphics_startup(
     entrant_count: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -128,23 +128,22 @@ def test_heat_viewer_rejects_wrong_entrant_count_before_graphics_startup(
     monkeypatch.setattr(app, "_build_race_viewer_scene", create_scene)
     entrants = (_heat_entrants() * 3)[:entrant_count]
 
-    with pytest.raises(ValueError, match="exactly four or eight"):
+    with pytest.raises(ValueError, match="two to ten"):
         create_heat_viewer_app(HeatViewerConfig(entrants=entrants))
 
     create_scene.assert_not_called()
 
 
-def test_heat_viewer_rejects_two_team_split_view_before_graphics_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_heat_viewer_accepts_split_view(monkeypatch: pytest.MonkeyPatch) -> None:
     create_scene = Mock()
     monkeypatch.setattr(app, "_build_race_viewer_scene", create_scene)
 
-    with pytest.raises(ValueError, match="two-team head-to-head viewer"):
-        create_heat_viewer_app(HeatViewerConfig(entrants=_heat_entrants(), camera_view=CameraView.SPLIT_FOLLOW))
+    config = HeatViewerConfig(entrants=_heat_entrants(), camera_view=CameraView.SPLIT_FOLLOW)
+    assert create_heat_viewer_app(config) is create_scene.return_value
+    create_scene.assert_called_once_with(config)
 
-    create_scene.assert_not_called()
 
-
-@pytest.mark.parametrize("entrant_count", [4, 8])
+@pytest.mark.parametrize("entrant_count", [2, 3, 4, 7, 8, 9, 10])
 def test_heat_viewer_accepts_supported_counts_before_starting_shared_scene(
     entrant_count: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -157,14 +156,14 @@ def test_heat_viewer_accepts_supported_counts_before_starting_shared_scene(
     create_scene.assert_called_once_with(config)
 
 
-def test_eight_car_damage_hud_uses_two_rows_of_four_without_overlap() -> None:
-    slots = damage_hud_layout(8)
+@pytest.mark.parametrize(("entrant_count", "row_counts"), [(8, [4, 4]), (9, [4, 4, 1])])
+def test_larger_heat_damage_hud_wraps_without_overlap(entrant_count: int, row_counts: list[int]) -> None:
+    slots = damage_hud_layout(entrant_count)
 
-    assert len(slots) == 8
-    assert len({(slot.center_x, slot.center_y) for slot in slots}) == 8
-    rows = {slot.center_y for slot in slots}
-    assert len(rows) == 2
-    assert all(sum(slot.center_y == row for slot in slots) == 4 for row in rows)
+    assert len(slots) == entrant_count
+    assert len({(slot.center_x, slot.center_y) for slot in slots}) == entrant_count
+    rows = sorted({slot.center_y for slot in slots})
+    assert [sum(slot.center_y == row for slot in slots) for row in rows] == row_counts
     for first, second in combinations(slots, 2):
         separated_horizontally = abs(first.center_x - second.center_x) > (first.width + second.width) / 2.0
         separated_vertically = abs(first.center_y - second.center_y) > (first.height + second.height) / 2.0

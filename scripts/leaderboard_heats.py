@@ -16,6 +16,8 @@ from typing import cast
 import yaml
 from run_submissions import DEFAULT_EXPORT_DIR, PROJECT_ROOT, resolve_controller
 
+from racing.race.heat import HEAT_ENTRANT_COUNTS
+
 
 @dataclass(frozen=True)
 class Leader:
@@ -165,6 +167,8 @@ def heat_command(leaders: Sequence[Leader], export_dir: Path, race_args: Sequenc
             str(PROJECT_ROOT / "scripts/run_submissions.py"),
         ]
     command.extend(leader.submission_id for leader in leaders)
+    if len(leaders) == 2:
+        command.append("--heat")
     if export_dir != DEFAULT_EXPORT_DIR:
         command.extend(["--export-dir", str(export_dir)])
     for leader in leaders:
@@ -183,7 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--metric", action="append", default=[], help="category name or unique substring; repeat to select"
     )
-    parser.add_argument("--cars", type=int, choices=(4, 8), default=8, help="cars per heat (default: 8)")
+    parser.add_argument(
+        "--cars", type=int, choices=HEAT_ENTRANT_COUNTS,
+        help="cars per heat (default: 10, 9, or 8, depending on eligible cars)",
+    )
     parser.add_argument("--list", action="store_true", help="list categories, sort directions, and eligible car counts")
     return parser
 
@@ -210,11 +217,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"# {title} — {direction} is better; {len(board.leaders)} eligible cars")
         if args.list:
             continue
-        leaders = board.ranked()[: args.cars]
+        car_count = args.cars if args.cars is not None else max(8, min(10, len(board.leaders)))
+        leaders = board.ranked()[:car_count]
         for rank, leader in enumerate(leaders, start=1):
             print(f"# {rank}. {leader.name} (submission {leader.submission_id}): {leader.value:g}")
-        if len(leaders) < args.cars:
-            print(f"# Skipped: need {args.cars} distinct eligible cars; found {len(leaders)}.")
+        if len(leaders) < car_count:
+            print(f"# Skipped: need {car_count} distinct eligible cars; found {len(leaders)}.")
         else:
             print(heat_command(leaders, export_dir, race_args))
         print()

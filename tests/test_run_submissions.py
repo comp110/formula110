@@ -10,7 +10,7 @@ from types import ModuleType
 import pytest
 
 from racing.game import cli
-from racing.game.config import CameraView, HeadToHeadViewerConfig
+from racing.game.config import CameraView, HeadToHeadViewerConfig, HeatViewerConfig
 from racing.race.runtime import DEFAULT_RACE_RANDOM_SEED
 from racing.student.api import RobotSensors, load_student_controller
 
@@ -161,7 +161,9 @@ def test_watched_viewer_receives_team_names_and_window_settings(
     config = configs[0]
     assert config.challenger_name == ("Blue Team" if named else "#101")
     assert config.incumbent_name == ("Red Team" if named else "#202")
-    assert config.camera_view == CameraView.THREE_QUARTER
+    assert config.camera_view == CameraView.CINEMATIC
+    assert config.starting_grid
+    assert config.grid_names == ("#101", "#202")
     assert config.random_seed == DEFAULT_RACE_RANDOM_SEED
     assert config.fullscreen is fullscreen
 
@@ -192,6 +194,7 @@ def test_headless_explicit_seed_and_h2h_options_are_forwarded(
             "0.5",
             "--camera",
             "follow",
+            "--no-damage",
             "--json",
         ]
     )
@@ -202,6 +205,7 @@ def test_headless_explicit_seed_and_h2h_options_are_forwarded(
     assert args.races == 3
     assert args.round_seconds == 0.5
     assert args.camera == "follow"
+    assert args.no_damage is True
     assert args.json is True
     assert "Seed: 7656 (reuse with --seed 7656)" in capsys.readouterr().err
 
@@ -252,6 +256,7 @@ def test_dry_run_prints_runnable_command_without_importing_controllers_or_dispat
     args = cli.build_argument_parser().parse_args(command[3:])
     assert args.challenger_module == str(challenger)
     assert args.incumbent_module == str(incumbent)
+    assert args.suppress_student_prints is True
     assert args.seed == 42
     assert args.watch is True
 
@@ -276,7 +281,7 @@ def test_submissions_with_identical_controller_names_load_independently(runner: 
 
 
 @pytest.mark.parametrize("headless", [False, True])
-@pytest.mark.parametrize("entrant_count", [4, 8])
+@pytest.mark.parametrize("entrant_count", [3, 4, 5, 6, 7, 8, 9, 10])
 def test_heat_ids_dispatch_with_ordered_submission_labels_and_shared_options(
     runner: ModuleType,
     tmp_path: Path,
@@ -304,6 +309,7 @@ def test_heat_ids_dispatch_with_ordered_submission_labels_and_shared_options(
             "random",
             "--track-seed",
             "110",
+            "--no-damage",
             "--races",
             "3",
             "--round-seconds",
@@ -315,15 +321,18 @@ def test_heat_ids_dispatch_with_ordered_submission_labels_and_shared_options(
     assert len(dispatched) == 1
     args = cli.build_argument_parser().parse_args(dispatched[0])
     assert args.command == "heat"
+    assert args.suppress_student_prints is True
     assert args.module == [str(path) for path in controllers]
     assert args.fallback_name == [f"#{identifier}" for identifier in identifiers]
     assert args.name is None
     assert args.watch is not headless
-    assert args.camera == "three_quarter"
+    assert args.camera == "cinematic"
+    assert args.starting_grid is not headless
     assert args.fullscreen is not headless
     assert args.json is headless
     assert args.seed == 424242
     assert args.track_seed == 110
+    assert args.no_damage is True
     assert args.races == 3
     assert args.round_seconds == 0.5
     output = capsys.readouterr()
@@ -331,8 +340,8 @@ def test_heat_ids_dispatch_with_ordered_submission_labels_and_shared_options(
     assert f"Entrant {entrant_count} #{identifiers[-1]}:" in output.err
 
 
-@pytest.mark.parametrize("entrant_count", [1, 3, 5, 6, 7, 9])
-def test_wrapper_requires_two_four_or_eight_ids(
+@pytest.mark.parametrize("entrant_count", [1, 11])
+def test_wrapper_requires_two_to_ten_ids(
     runner: ModuleType,
     entrant_count: int,
     capsys: pytest.CaptureFixture[str],
@@ -342,10 +351,10 @@ def test_wrapper_requires_two_four_or_eight_ids(
         runner.main(identifiers)
 
     assert error.value.code == 2
-    assert "provide exactly two IDs for head-to-head or four or eight IDs for a heat" in capsys.readouterr().err
+    assert "provide two to ten submission IDs" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("entrant_count", [4, 8])
+@pytest.mark.parametrize("entrant_count", [3, 4, 5, 6, 7, 8, 9, 10])
 def test_heat_rejects_duplicate_submission_ids(
     runner: ModuleType,
     capsys: pytest.CaptureFixture[str],
@@ -359,7 +368,7 @@ def test_heat_rejects_duplicate_submission_ids(
     assert f"{entrant_count} distinct submission IDs" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("entrant_count", [4, 8])
+@pytest.mark.parametrize("entrant_count", [3, 4, 5, 6, 7, 8, 9, 10])
 def test_heat_dry_run_resolves_modules_without_importing_them(
     runner: ModuleType,
     tmp_path: Path,
@@ -383,3 +392,96 @@ def test_heat_dry_run_resolves_modules_without_importing_them(
     assert args.fallback_name == [f"#{identifier}" for identifier in identifiers]
     assert len(args.module) == entrant_count
     assert args.seed == 42
+
+
+@pytest.mark.parametrize("allow_prints", [False, True])
+def test_runner_suppresses_student_output_but_keeps_race_output(
+    runner: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    allow_prints: bool,
+) -> None:
+    source = (
+        "from racing import RobotCommand\n"
+        "print('student import')\n"
+        "def control(sensors):\n"
+        "    print('student tick')\n"
+        "    return RobotCommand(throttle=0.25)\n"
+    )
+    paths = [make_submission(tmp_path, identifier, source=source) for identifier in ("101", "202")]
+
+    class FakeApp:
+        def run(self) -> None:
+            print("race output")
+
+    def fake_viewer(config: HeadToHeadViewerConfig) -> FakeApp:
+        for controller in (config.challenger_controller, config.incumbent_controller):
+            assert controller is not None
+            assert controller(RobotSensors()).throttle == 0.25
+        return FakeApp()
+
+    monkeypatch.setattr(cli, "create_head_to_head_viewer_app", fake_viewer)
+    runner.main(["101", "202", "--export-dir", str(tmp_path), *(["--allow-student-prints"] if allow_prints else [])])
+
+    output = capsys.readouterr()
+    assert output.out.count("student import") == (2 if allow_prints else 0)
+    assert output.out.count("student tick") == (2 if allow_prints else 0)
+    assert "race output" in output.out
+    assert "Seed:" in output.err
+    assert all(path.read_text(encoding="utf-8") == source for path in paths)
+
+
+@pytest.mark.parametrize("heat", [False, True])
+def test_partners_title_and_car_names_reach_the_starting_grid(
+    runner: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, heat: bool,
+) -> None:
+    for identifier in ("101", "202"):
+        make_submission(
+            tmp_path, identifier,
+            source="from racing import RobotCommand\nRACING_NAME = 'Zoom'\n"
+            "RACING_COLOR = '#ff8000'\ndef control(sensors):\n    return RobotCommand()\n",
+        )
+    (tmp_path / "submission_metadata.yml").write_text(
+        "submission_101:\n  :submitters:\n    - :name: Ada Lovelace\n    - :name: Grace Brewster Hopper\n"
+        "submission_202:\n  submitters:\n    - name: Jean-Luc Picard\n", encoding="utf-8",
+    )
+    configs: list[HeadToHeadViewerConfig | HeatViewerConfig] = []
+
+    class FakeApp:
+        def run(self) -> None:
+            pass
+
+    def viewer(config: HeadToHeadViewerConfig | HeatViewerConfig) -> FakeApp:
+        configs.append(config)
+        return FakeApp()
+
+    monkeypatch.setattr(cli, "create_heat_viewer_app" if heat else "create_head_to_head_viewer_app", viewer)
+    runner.main([
+        "101", "202", "--export-dir", str(tmp_path), "--title", "The Grand Final",
+        *(["--heat"] if heat else []),
+    ])
+    config = configs[0]
+    assert config.title == "The Grand Final"
+    assert config.grid_names == ("Ada L. & Grace H.", "Jean-Luc P.")
+    assert config.starting_grid
+    if isinstance(config, HeatViewerConfig):
+        assert config.entrants[0].name == "Zoom"
+        assert config.entrants[0].team_color == (1.0, 128 / 255, 0.0, 1.0)
+    else:
+        assert config.challenger_name == "Zoom"
+        assert config.challenger_team_color == (1.0, 128 / 255, 0.0, 1.0)
+
+
+def test_participant_metadata_fallbacks_and_single_names(runner: ModuleType, tmp_path: Path) -> None:
+    (tmp_path / "submission_metadata.yml").write_text(
+        "submission_101:\n  :submitters:\n    - :name: '  Élodie   Durand '\n    - :name: Prince\n"
+        "submission_202:\n  :submitters: []\n", encoding="utf-8",
+    )
+    assert runner.participant_names(tmp_path, ["101", "202", "303"]) == ["Élodie D. & Prince", "#202", "#303"]
+
+
+def test_grid_names_validate_count_before_loading_controllers() -> None:
+    with pytest.raises(SystemExit) as error:
+        cli.main(["heat", "--module", "missing", "--module", "missing", "--grid-name", "Ada L."])
+    assert error.value.code == 2

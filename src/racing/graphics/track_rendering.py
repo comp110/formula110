@@ -14,6 +14,7 @@ from racing.graphics.render_assets import (
     SceneAssets,
     lit_entity,
 )
+from racing.graphics.static_batching import batch_static_track_entities
 from racing.graphics.track_mesh import (
     clean_offset_path,
     offset_path,
@@ -272,6 +273,7 @@ def add_track(
     """Draw a centerline-driven racing track and optional colliders."""
     wall_inside_distance = TRACK_WIDTH / 2 + TRACK_EDGE_BUFFER
     track_light_receivers: list[Any] = []
+    static_entities: list[Any] = []
 
     track_light_receivers.extend(
         _add_lit_ribbon_chunks(
@@ -287,14 +289,16 @@ def add_track(
             double_sided=True,
         )
     )
-    _add_unlit_ribbon_chunks(
-        ursina,
-        samples=samples,
-        inner_offset=-TRACK_WIDTH / 2 + TRACK_CURB_WIDTH * 0.45,
-        outer_offset=TRACK_WIDTH / 2 - TRACK_CURB_WIDTH * 0.45,
-        y=TRACK_SURFACE_Y + 0.006 * TRACK_SCALE,
-        uv_scale=5.4 * TRACK_SCALE,
-        color=TRACK_SURFACE_LIGHT_WASH_COLOR,
+    static_entities.extend(
+        _add_unlit_ribbon_chunks(
+            ursina,
+            samples=samples,
+            inner_offset=-TRACK_WIDTH / 2 + TRACK_CURB_WIDTH * 0.45,
+            outer_offset=TRACK_WIDTH / 2 - TRACK_CURB_WIDTH * 0.45,
+            y=TRACK_SURFACE_Y + 0.006 * TRACK_SCALE,
+            uv_scale=5.4 * TRACK_SCALE,
+            color=TRACK_SURFACE_LIGHT_WASH_COLOR,
+        )
     )
     for side in (-1, 1):
         wall_inside_offset, wall_outside_offset, _ = wall_offsets_for_side(
@@ -346,26 +350,31 @@ def add_track(
                 assets=assets,
             )
         )
-        lit_entity(
-            ursina,
-            model=ribbon_mesh(
+        static_entities.append(
+            lit_entity(
                 ursina,
-                samples,
-                inner_offset=wall_inside_offset - side * 0.18 * TRACK_SCALE,
-                outer_offset=wall_inside_offset,
-                y=0.056 * TRACK_SCALE,
-                uv_scale=2.5 * TRACK_SCALE,
-            ),
-            color=(0.03, 0.035, 0.03, 0.38),
-            double_sided=True,
-            unlit=True,
+                model=ribbon_mesh(
+                    ursina,
+                    samples,
+                    inner_offset=wall_inside_offset - side * 0.18 * TRACK_SCALE,
+                    outer_offset=wall_inside_offset,
+                    y=0.056 * TRACK_SCALE,
+                    uv_scale=2.5 * TRACK_SCALE,
+                ),
+                color=(0.03, 0.035, 0.03, 0.38),
+                double_sided=True,
+                unlit=True,
+            )
         )
-    _add_track_night_lights(
-        ursina=ursina,
-        samples=samples,
-        receivers=tuple(track_light_receivers),
-        legacy_layout=legacy_lighting,
+    static_entities.extend(
+        _add_track_night_lights(
+            ursina=ursina,
+            samples=samples,
+            receivers=tuple(track_light_receivers),
+            legacy_layout=legacy_lighting,
+        )
     )
+    batch_static_track_entities(ursina=ursina, entities=(*track_light_receivers, *static_entities))
 
     if include_collision:
         add_mugello_short_track_collisions(physics_world=physics_world, render=ursina.scene)
@@ -701,7 +710,8 @@ def _add_unlit_ribbon_chunks(
     y: float,
     uv_scale: float,
     color: tuple[float, float, float, float],
-) -> None:
+) -> tuple[Any, ...]:
+    entities: list[Any] = []
     for mesh in ribbon_chunk_meshes(
         ursina,
         samples,
@@ -711,13 +721,16 @@ def _add_unlit_ribbon_chunks(
         uv_scale=uv_scale,
         segments_per_chunk=TRACK_LIGHT_RECEIVER_SEGMENTS_PER_CHUNK,
     ):
-        lit_entity(
-            ursina,
-            model=mesh,
-            color=color,
-            double_sided=True,
-            unlit=True,
+        entities.append(
+            lit_entity(
+                ursina,
+                model=mesh,
+                color=color,
+                double_sided=True,
+                unlit=True,
+            )
         )
+    return tuple(entities)
 
 
 def _add_track_start_line(
@@ -809,44 +822,52 @@ def _add_track_night_lights(
     samples: tuple[TrackPoint, ...],
     receivers: tuple[Any, ...],
     legacy_layout: bool,
-) -> None:
+) -> tuple[Any, ...]:
     spotlights: list[TrackSpotlight] = []
+    entities: list[Any] = []
     for render_index, layout in enumerate(track_light_layouts(samples, legacy_layout=legacy_layout)):
         if legacy_layout and render_index in TRACK_REMOVED_STREETLIGHT_RENDER_INDICES:
             continue
         lamp_x, _, lamp_z = layout.post
         head_x, _, head_z = layout.head
-        lit_entity(
-            ursina,
-            model="cube",
-            position=(lamp_x, TRACK_LIGHT_POST_HEIGHT / 2, lamp_z),
-            scale=(0.10 * TRACK_SCALE, TRACK_LIGHT_POST_HEIGHT, 0.10 * TRACK_SCALE),
-            color=(0.055, 0.058, 0.060, 1),
-            unlit=True,
-        )
-        lit_entity(
-            ursina,
-            model=_lamp_arm_mesh(
+        entities.append(
+            lit_entity(
                 ursina,
-                start=(lamp_x, TRACK_LIGHT_POST_HEIGHT, lamp_z),
-                end=(head_x, TRACK_LIGHT_POST_HEIGHT, head_z),
-                thickness=0.08 * TRACK_SCALE,
-            ),
-            color=(0.055, 0.058, 0.060, 1),
-            unlit=True,
+                model="cube",
+                position=(lamp_x, TRACK_LIGHT_POST_HEIGHT / 2, lamp_z),
+                scale=(0.10 * TRACK_SCALE, TRACK_LIGHT_POST_HEIGHT, 0.10 * TRACK_SCALE),
+                color=(0.055, 0.058, 0.060, 1),
+                unlit=True,
+            )
         )
-        lit_entity(
-            ursina,
-            model="sphere",
-            position=(head_x, TRACK_LIGHT_HEAD_CENTER_Y, head_z),
-            scale=(0.32 * TRACK_SCALE, 0.14 * TRACK_SCALE, 0.32 * TRACK_SCALE),
-            color=(1.0, 0.86, 0.52, 1),
-            unlit=True,
+        entities.append(
+            lit_entity(
+                ursina,
+                model=_lamp_arm_mesh(
+                    ursina,
+                    start=(lamp_x, TRACK_LIGHT_POST_HEIGHT, lamp_z),
+                    end=(head_x, TRACK_LIGHT_POST_HEIGHT, head_z),
+                    thickness=0.08 * TRACK_SCALE,
+                ),
+                color=(0.055, 0.058, 0.060, 1),
+                unlit=True,
+            )
+        )
+        entities.append(
+            lit_entity(
+                ursina,
+                model="sphere",
+                position=(head_x, TRACK_LIGHT_HEAD_CENTER_Y, head_z),
+                scale=(0.32 * TRACK_SCALE, 0.14 * TRACK_SCALE, 0.32 * TRACK_SCALE),
+                color=(1.0, 0.86, 0.52, 1),
+                unlit=True,
+            )
         )
         spotlights.append(_add_track_spotlight(ursina=ursina, layout=layout))
 
     _register_track_spotlights(ursina=ursina, spotlights=tuple(spotlights))
     _bind_track_spotlights_to_receivers(receivers=receivers, spotlights=tuple(spotlights))
+    return tuple(entities)
 
 
 def _register_track_spotlights(*, ursina: Any, spotlights: tuple[TrackSpotlight, ...]) -> None:
@@ -1528,9 +1549,7 @@ def _nearest_start_finish_sample_segment_fraction(
         if segment_length_squared <= 0.0:
             continue
 
-        fraction = (
-            (position.x - sample.x) * segment_x + (position.z - sample.z) * segment_z
-        ) / segment_length_squared
+        fraction = ((position.x - sample.x) * segment_x + (position.z - sample.z) * segment_z) / segment_length_squared
         fraction = max(0.0, min(1.0, fraction))
         nearest_x = sample.x + segment_x * fraction
         nearest_z = sample.z + segment_z * fraction

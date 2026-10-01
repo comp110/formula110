@@ -36,6 +36,7 @@ from racing.race.heat import (
     format_heat_result,
     run_headless_heat,
 )
+from racing.race.laps import DEFAULT_FINISH_TIMEOUT_SECONDS, validate_finish_timeout_seconds
 from racing.race.rules import HeadToHeadRaceRules, HeadToHeadScoring
 from racing.race.runtime import DEFAULT_RACE_RANDOM_SEED
 from racing.student.api import StudentControllerSubmission, load_student_submission
@@ -47,6 +48,15 @@ def _add_audio_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-audio", action="store_true", help="disable graphical racing audio")
     parser.add_argument("--no-music", action="store_true", help="disable retro music while keeping engine audio")
     parser.add_argument("--muted", action="store_true", help="start graphical racing audio muted")
+
+
+def _add_student_print_argument(parser: argparse.ArgumentParser, *, suppress_defaults: bool = False) -> None:
+    parser.add_argument(
+        "--suppress-student-prints",
+        action="store_true",
+        default=argparse.SUPPRESS if suppress_defaults else False,
+        help="skip print(...) calls in loaded controller modules without editing their source files",
+    )
 
 
 def _add_color_argument(parser: argparse.ArgumentParser) -> None:
@@ -114,6 +124,7 @@ def _add_race_rule_arguments(parser: argparse.ArgumentParser, *, include_scoring
     else:
         parser.set_defaults(scoring="team-sum", win_margin_m=1.0)
     parser.add_argument("--no-marshal", action="store_true", help="disable stuck-car marshal recovery")
+    parser.add_argument("--no-damage", action="store_true", help="disable collision damage and damage retirements")
     parser.add_argument("--marshal-stuck-seconds", type=float, default=1.5)
     parser.add_argument("--marshal-penalty-m", type=float, default=5.0)
     parser.add_argument("--marshal-cooldown-seconds", type=float, default=2.0)
@@ -164,10 +175,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--size", type=parse_window_size, default=(1280, 720))
     _add_color_argument(parser)
     _add_audio_arguments(parser)
+    _add_student_print_argument(parser)
 
     subparsers = parser.add_subparsers(dest="command")
     h2h_parser = subparsers.add_parser("h2h", help="race student controllers and/or keyboard control")
+    _add_starting_grid_arguments(h2h_parser)
     _add_audio_arguments(h2h_parser)
+    _add_student_print_argument(h2h_parser, suppress_defaults=True)
     h2h_parser.add_argument(
         "--challenger-module",
         type=str,
@@ -259,13 +273,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="incumbent formula car paint color",
     )
 
-    heat_parser = subparsers.add_parser("heat", help="race four or eight student controllers on one shared grid")
+    heat_parser = subparsers.add_parser("heat", help="race two to ten student controllers on one shared grid")
+    _add_starting_grid_arguments(heat_parser)
+    _add_student_print_argument(heat_parser, suppress_defaults=True)
     heat_parser.add_argument(
         "--module",
         action="append",
         required=True,
         metavar="MODULE",
-        help="controller file or module; repeat exactly four or eight times in entrant order",
+        help="controller file or module; repeat two to ten times in entrant order",
     )
     heat_parser.add_argument(
         "--name",
@@ -282,7 +298,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
     heat_parser.add_argument("--control-function", default=argparse.SUPPRESS)
     heat_parser.add_argument("--fixed-delta-seconds", type=float, default=argparse.SUPPRESS)
     heat_parser.add_argument("--races", type=int, default=1, help="number of heat races to run")
-    heat_parser.add_argument("--round-seconds", type=float, default=DEFAULT_RACE_SECONDS)
+    heat_length = heat_parser.add_mutually_exclusive_group()
+    heat_length.add_argument("--round-seconds", type=float, default=DEFAULT_RACE_SECONDS)
+    heat_length.add_argument("--round-laps", type=int, help="laps per race; classify by finish order")
+    heat_parser.add_argument(
+        "--finish-timeout-seconds",
+        type=float,
+        default=DEFAULT_FINISH_TIMEOUT_SECONDS,
+        help="maximum wait after P1 finishes a lap heat (default: 20 seconds; 0 ends immediately)",
+    )
     heat_parser.add_argument("--seed", type=int, default=argparse.SUPPRESS)
     _add_track_arguments(heat_parser, suppress_defaults=True)
     _add_race_rule_arguments(heat_parser, include_scoring=False)
@@ -294,11 +318,22 @@ def build_argument_parser() -> argparse.ArgumentParser:
     heat_parser.add_argument("--size", type=parse_window_size, default=(1280, 720))
     heat_parser.add_argument(
         "--camera",
-        choices=tuple(view.value for view in CameraView if view is not CameraView.SPLIT_FOLLOW),
+        choices=tuple(view.value for view in CameraView),
         default=CameraView.THREE_QUARTER.value,
-        help="shared heat camera; split_follow is only supported by h2h",
+        help="heat camera; split_follow pairs the focused car with its closest trailing competitor",
     )
     return parser
+
+
+def _add_starting_grid_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--title", help="race title shown in the window and on the starting grid")
+    parser.add_argument(
+        "--starting-grid", action="store_true", help="wait for click/Space on a full-screen starting grid",
+    )
+    parser.add_argument(
+        "--grid-name", action="append", metavar="NAME",
+        help="participant names for the starting grid, in module order (challenger then incumbent for h2h)",
+    )
 
 
 def _head_to_head_rules_from_args(args: argparse.Namespace) -> HeadToHeadRaceRules:
@@ -309,6 +344,7 @@ def _head_to_head_rules_from_args(args: argparse.Namespace) -> HeadToHeadRaceRul
         marshal_stuck_seconds=float(args.marshal_stuck_seconds),
         marshal_penalty_m=float(args.marshal_penalty_m),
         marshal_cooldown_seconds=float(args.marshal_cooldown_seconds),
+        damage_enabled=not bool(args.no_damage),
     )
 
 
@@ -318,9 +354,10 @@ def _load_submission_from_args(
     student_module: str,
     function_name: str,
     role: str,
+    suppress_prints: bool = False,
 ) -> StudentControllerSubmission:
     try:
-        return load_student_submission(student_module, function_name=function_name)
+        return load_student_submission(student_module, function_name=function_name, suppress_prints=suppress_prints)
     except (AttributeError, FileNotFoundError, ImportError, TypeError, ValueError) as error:
         parser.error(f"{role}: {error}")
     raise AssertionError("parser.error should exit")
@@ -378,12 +415,19 @@ def _run_heat_from_args(
     track_id: str,
     track_seed: int | None,
 ) -> HeatResult | None:
+    if args.round_laps is not None and args.round_laps < 1:
+        parser.error("--round-laps must be a positive integer")
+    try:
+        validate_finish_timeout_seconds(float(args.finish_timeout_seconds))
+    except ValueError:
+        parser.error("--finish-timeout-seconds must be finite and nonnegative")
     modules = cast(list[str], args.module)
     if len(modules) not in HEAT_ENTRANT_COUNTS:
-        parser.error("heat requires exactly four or eight --module arguments")
+        parser.error("heat requires two to ten --module arguments")
     names = cast(list[str] | None, args.name)
     fallback_names = cast(list[str] | None, args.fallback_name)
-    for flag, values in (("--name", names), ("--fallback-name", fallback_names)):
+    grid_names = cast(list[str] | None, args.grid_name)
+    for flag, values in (("--name", names), ("--fallback-name", fallback_names), ("--grid-name", grid_names)):
         if values is not None and len(values) != len(modules):
             parser.error(f"{flag} must be repeated {len(modules)} times in entrant order")
     if bool(args.watch) and bool(args.json):
@@ -397,6 +441,7 @@ def _run_heat_from_args(
             student_module=module,
             function_name=str(args.control_function),
             role=role,
+            suppress_prints=bool(args.suppress_student_prints),
         )
         entrants.append(
             HeatEntrant(
@@ -414,11 +459,16 @@ def _run_heat_from_args(
         create_heat_viewer_app(
             HeatViewerConfig(
                 entrants=tuple(entrants),
+                title=args.title or "Racing Heat",
+                starting_grid=bool(args.starting_grid),
+                grid_names=tuple(grid_names or ()),
                 size=cast(tuple[int, int], args.size),
                 fullscreen=bool(args.fullscreen),
                 camera_view=CameraView(str(args.camera)),
                 race_count=int(args.races),
                 round_seconds=float(args.round_seconds),
+                round_laps=cast(int | None, args.round_laps),
+                finish_timeout_seconds=float(args.finish_timeout_seconds),
                 fixed_delta_seconds=float(args.fixed_delta_seconds),
                 random_seed=int(args.seed),
                 track_id=track_id,
@@ -433,6 +483,8 @@ def _run_heat_from_args(
         entrants=tuple(entrants),
         race_count=int(args.races),
         round_seconds=float(args.round_seconds),
+        round_laps=cast(int | None, args.round_laps),
+        finish_timeout_seconds=float(args.finish_timeout_seconds),
         fixed_delta_seconds=float(args.fixed_delta_seconds),
         random_seed=int(args.seed),
         track_id=track_id,
@@ -461,6 +513,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
 
     if getattr(args, "command", None) == "h2h":
+        grid_names = cast(list[str] | None, args.grid_name)
+        if grid_names is not None and len(grid_names) != 2:
+            parser.error("--grid-name must be repeated twice: challenger then incumbent")
         if human_recording_path is not None:
             parser.error("--record-human is only available in single-car manual mode")
         challenger_module = cast(str | None, args.challenger_module)
@@ -496,6 +551,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                     student_module=cast(str, challenger_module),
                     function_name=str(args.control_function),
                     role="challenger",
+                    suppress_prints=bool(args.suppress_student_prints),
                 )
             )
             incumbent_submission = (
@@ -506,10 +562,14 @@ def main(argv: Sequence[str] | None = None) -> None:
                     student_module=cast(str, incumbent_module),
                     function_name=str(args.control_function),
                     role="incumbent",
+                    suppress_prints=bool(args.suppress_student_prints),
                 )
             )
             create_head_to_head_viewer_app(
                 HeadToHeadViewerConfig(
+                    title=args.title or "Racing Head-to-Head",
+                    starting_grid=bool(args.starting_grid),
+                    grid_names=tuple(grid_names or ()),
                     size=cast(tuple[int, int], args.size),
                     fullscreen=bool(args.fullscreen),
                     camera_view=CameraView(str(args.camera)),
@@ -557,12 +617,14 @@ def main(argv: Sequence[str] | None = None) -> None:
             student_module=challenger_module,
             function_name=str(args.control_function),
             role="challenger",
+            suppress_prints=bool(args.suppress_student_prints),
         )
         incumbent_submission = _load_submission_from_args(
             parser=parser,
             student_module=incumbent_module,
             function_name=str(args.control_function),
             role="incumbent",
+            suppress_prints=bool(args.suppress_student_prints),
         )
         result = run_headless_head_to_head(
             challenger_controller=challenger_submission.controller,
@@ -598,6 +660,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             student_module=student_module,
             function_name=str(args.control_function),
             role="student",
+            suppress_prints=bool(args.suppress_student_prints),
         )
 
     playable_app = create_app(

@@ -371,6 +371,53 @@ def create_robot_vehicle(
     )
 
 
+def vehicle_reset_pose_is_clear(
+    *,
+    robot: RobotVehicle,
+    position: tuple[float, float, float],
+    heading_degrees: float,
+    other_robots: tuple[RobotVehicle, ...],
+    clearance_m: float = 0.25,
+) -> bool:
+    """Test a padded car and wheel envelope without moving the real vehicle."""
+    world = robot.physics_world
+    if world is None:
+        return False
+    bullet = cast(Any, import_module("panda3d.bullet"))
+    core = cast(Any, import_module("panda3d.core"))
+    config = robot.config
+    bounds = vehicle_collision_bounds(config)
+    half_width = max(bounds.half_width, config.wheel_track_half_width + config.wheel_width / 2) + clearance_m
+    half_length = max(bounds.half_length, config.wheelbase_half_length + config.wheel_radius) + clearance_m
+    # Include the space beneath the chassis so wheel rays cannot land on another
+    # car. Leave the supporting floor just outside the query envelope.
+    min_y = min(bounds.min_y, -vehicle_spawn_height(config) + 0.02)
+    max_y = max(bounds.max_y, config.wheel_connection_height) + clearance_m
+    probe = bullet.BulletRigidBodyNode("vehicle-reset-probe")
+    probe.addShape(
+        bullet.BulletBoxShape(core.Vec3(half_width, (max_y - min_y) / 2, half_length)),
+        core.TransformState.makePos(core.Vec3(0.0, (max_y + min_y) / 2, 0.0)),
+    )
+    probe_np = core.NodePath(probe)
+    probe_np.setPos(*position)
+    probe_np.setHpr(heading_degrees, 0.0, 0.0)
+    try:
+        own_body = robot.chassis_np.node()
+        for contact in world.contactTest(probe).getContacts():
+            other_body = contact.getNode1() if contact.getNode0() == probe else contact.getNode0()
+            if other_body != own_body:
+                return False
+        # Bullet's broadphase still has the old bounds for cars marshalled
+        # earlier this tick. Pair queries use their current transforms directly.
+        return not any(
+            world.contactTestPair(probe, other.chassis_np.node()).getNumContacts() > 0
+            for other in other_robots
+            if other is not robot and not other.eliminated
+        )
+    finally:
+        probe_np.removeNode()
+
+
 def _add_chassis_collision_shapes(*, chassis: Any, bullet: Any, core: Any, config: VehiclePhysicsConfig) -> None:
     hull = config.chassis_collision_hull
     if hull is not None:

@@ -16,6 +16,7 @@ from racing.track.world import clamp
 
 ENGINE_AUDIO_FILENAME = "f1_engine_loop.wav"
 MUSIC_AUDIO_FILENAME = "berlin_town_music.wav"
+START_LIGHT_AUDIO_FILENAME = "f1_start_light_beep.wav"
 TIRE_SQUEAL_AUDIO_FILENAMES = ("tire_squeal_1.wav", "tire_squeal_2.wav", "tire_squeal_3.wav")
 FORMULA_ENGINE_AUDIO_FILENAMES = ("formula_engine_body_loop.wav",)
 MUTE_BUTTON_TEXT = "Audio On"
@@ -122,6 +123,10 @@ class RacingAudioRuntimeLike(Protocol):
         """Update sound positions, pitch, and volume for one frame."""
         ...
 
+    def play_start_light_beep(self) -> None:
+        """Play the non-spatial cue for one newly illuminated start light."""
+        ...
+
     def set_muted(self, muted: bool) -> None:
         """Turn all simulator audio on or off."""
         ...
@@ -162,6 +167,8 @@ class RacingAudioRuntime:
         self._emitters: dict[int, EngineAudioEmitter] = {}
 
         base = ursina.application.base
+        self._loader = base.loader
+        self._start_light_sound: Any | None = None
         audio3d_module = cast(Any, import_module("direct.showbase.Audio3DManager"))
         audio3d_manager_class = audio3d_module.Audio3DManager
         self._audio3d = audio3d_manager_class(
@@ -273,13 +280,25 @@ class RacingAudioRuntime:
             _call_if_available(self._music_sound, "setVolume", self._music_volume())
         self._audio3d.update()
 
+    def play_start_light_beep(self) -> None:
+        """Load once and retrigger a single beep in sync with each red light."""
+        if self._muted:
+            return
+        if self._start_light_sound is None:
+            self._start_light_sound = self._loader.loadSfx(self._resource_path(START_LIGHT_AUDIO_FILENAME))
+            _call_if_available(self._start_light_sound, "setLoop", False)
+        _call_if_available(self._start_light_sound, "setVolume", clamp(self._config.master_volume, 0.0, 1.0))
+        _call_if_available(self._start_light_sound, "play")
+
     def set_muted(self, muted: bool) -> None:
         """Turn all simulator audio on or off."""
         self._muted = muted
+        if muted and self._start_light_sound is not None:
+            _call_if_available(self._start_light_sound, "stop")
 
     def toggle_muted(self) -> bool:
         """Toggle global mute state and return the new state."""
-        self._muted = not self._muted
+        self.set_muted(not self._muted)
         return self._muted
 
     def button_text(self) -> str:
@@ -288,6 +307,8 @@ class RacingAudioRuntime:
 
     def destroy(self) -> None:
         """Release temporary resource handles used by importlib.resources."""
+        if self._start_light_sound is not None:
+            _call_if_available(self._start_light_sound, "stop")
         self._resource_stack.close()
 
     def _apply_spatial_settings(self) -> None:
@@ -405,6 +426,9 @@ class NullRacingAudioRuntime:
     def update(self, delta_seconds: float) -> None:
         """Update sound positions, pitch, and volume for one frame."""
         _ = delta_seconds
+
+    def play_start_light_beep(self) -> None:
+        """Keep the visual countdown available without an audio device."""
 
     def set_muted(self, muted: bool) -> None:
         """Turn all simulator audio on or off."""

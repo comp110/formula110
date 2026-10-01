@@ -45,6 +45,24 @@ def load_grader() -> ModuleType:
     return module
 
 
+@pytest.fixture(params=["source", "upload"])
+def qualification_grader(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """Exercise both future builds and the exact ZIP supplied for this update."""
+    if request.param == "source":
+        module = load_grader()
+        monkeypatch.setattr(module, "read_config", load_builder().build_config)
+        return module
+    path = Path(__file__).parents[1] / "formula110-gradescope-autograder__1_.zip"
+    if not path.is_file():
+        pytest.skip("the instructor-supplied autograder ZIP is not present")
+    with zipfile.ZipFile(path) as archive:
+        module = ModuleType("formula110_uploaded_grader")
+        exec(compile(archive.read("grade.py"), f"{path}/grade.py", "exec"), module.__dict__)
+        config = json.loads(archive.read("config.json"))
+    monkeypatch.setattr(module, "read_config", lambda: config)
+    return module
+
+
 def load_race_worker() -> ModuleType:
     path = Path(__file__).parents[1] / "autograder" / "gradescope" / "race_worker.py"
     spec = importlib.util.spec_from_file_location("formula110_race_worker", path)
@@ -90,7 +108,7 @@ def test_build_gradescope_archive_has_required_root_files_and_config(tmp_path: P
             "cooldown_seconds": 2.0,
         }
         assert sum(config["rubric"].values()) == 100.0
-        assert config["rubric"] == {"completion_with_forward_progress": 100.0}
+        assert config["rubric"] == {"event_qualification": 100.0}
         for executable in ("setup.sh", "run_autograder", "race_worker.py", "control_worker.py"):
             mode = archive.getinfo(executable).external_attr >> 16
             assert mode & stat.S_IXUSR
@@ -359,12 +377,33 @@ def test_export_student_controllers_reports_missing_module(tmp_path: Path) -> No
         exporter.export_controller("controllers.does_not_exist", tmp_path / "submission.zip")
 
 
-def test_grader_evaluates_only_manifest_controller_and_awards_forward_progress(
+@pytest.mark.parametrize(
+    ("worst_laps", "trial_changes", "expected_score"),
+    [
+        pytest.param(2.0, {}, 100.0, id="exact-cutoff"),
+        pytest.param(2.5, {}, 100.0, id="above-cutoff"),
+        pytest.param(1.99999, {}, 0.0, id="rounding-does-not-qualify"),
+        pytest.param(1.9, {}, 0.0, id="one-slow-spawn-despite-high-average"),
+        pytest.param(1.1, {}, 0.0, id="forward-progress-alone-does-not-qualify"),
+        pytest.param(1.9, {"raw_partial_laps": 2.5}, 0.0, id="marshal-penalty-counts"),
+        pytest.param(0.0, {"raw_distance_m": 0.0}, 0.0, id="zero-progress"),
+        pytest.param(2.0, {"elapsed_seconds": 29.0}, 0.0, id="ended-early"),
+        pytest.param(2.0, {"survived": False}, 0.0, id="eliminated"),
+        pytest.param(2.0, {"damage": 1.0}, 0.0, id="full-damage"),
+        pytest.param(2.0, {"ok": False, "error": "controller timed out"}, 0.0, id="failed-run"),
+        pytest.param(2.0, {"damage": 0.5, "wall_contact_seconds": 1.0}, 100.0, id="contact-allowed"),
+        pytest.param(2.0, {"laps": []}, 100.0, id="other-trophies-not-required"),
+    ],
+)
+def test_grader_evaluates_only_manifest_controller_and_awards_event_qualification(
     monkeypatch: pytest.MonkeyPatch,
+    qualification_grader: ModuleType,
+    worst_laps: float,
+    trial_changes: dict[str, object],
+    expected_score: float,
 ) -> None:
-    builder = load_builder()
-    grader = load_grader()
-    config = builder.build_config()
+    grader = qualification_grader
+    config = grader.read_config()
     controller_file = Path("/submission/controllers/selected.py")
     requested_modules: list[str] = []
 
@@ -398,14 +437,14 @@ def test_grader_evaluates_only_manifest_controller_and_awards_forward_progress(
         assert marshal_stuck_seconds == 2.0
         assert marshal_penalty_m == 5.0
         assert marshal_cooldown_seconds == 2.0
-        return [
+        trials: list[dict[str, object]] = [
             {
                 "ok": True,
                 "seed": seed,
                 "elapsed_seconds": duration_seconds,
                 "raw_distance_m": 200.0,
-                "partial_laps": 1.1,
-                "lap_count": 1,
+                "partial_laps": 3.0,
+                "lap_count": 3,
                 "damage": 0.0,
                 "survived": True,
                 "wall_contact_seconds": 0.0,
@@ -426,21 +465,103 @@ def test_grader_evaluates_only_manifest_controller_and_awards_forward_progress(
             }
             for seed in seeds
         ]
+        trials[-1].update(partial_laps=worst_laps, **trial_changes)
+        return trials
 
     monkeypatch.setattr(grader, "run_trials", passing_trials)
 
     results = grader.grade()
 
     assert requested_modules == ["controllers.selected"]
-    assert results["tests"][0]["score"] == 100.0
-    assert results["tests"][0]["status"] == "passed"
+    assert results["tests"][0]["score"] == expected_score
+    assert results["tests"][0]["max_score"] == 100.0
+    assert results["tests"][0]["status"] == ("passed" if expected_score else "failed")
+    assert sum(test["score"] for test in results["tests"]) == expected_score
+    for feedback in (results["output"], results["tests"][0]["output"]):
+        status = "QUALIFIED FOR THE F110 EVENT" if expected_score else "NOT QUALIFIED FOR THE F110 EVENT"
+        assert feedback.startswith(status)
+        assert "All Spawns, No Crumbs >= 2.0" in feedback
+        assert "LOWEST penalty-adjusted lap progress across 5 runs" in feedback
+        assert "30 simulated seconds" in feedback
+        assert "EVERY starting position" in feedback
+        assert "Qualification uses unrounded progress" in feedback
     assert "Dependencies:" not in results["output"]
     assert "dependencies ready" not in results["output"]
     assert results["extra_data"]["controller_module"] == "controllers.selected"
     assert [trial["seed"] for trial in results["extra_data"]["controller_trials"]] == [1, 2, 3, 4, 5]
-    assert results["leaderboard"][0] == {"name": "All Spawns, No Crumbs (Laps)", "value": 1.1}
-    assert "Leaderboard metrics:" in results["output"]
-    assert "- All Spawns, No Crumbs (Laps): 1.1" in results["output"]
+    if not trial_changes or "raw_partial_laps" in trial_changes or expected_score == 100.0:
+        assert results["leaderboard"][0] == {
+            "name": "All Spawns, No Crumbs (Laps)",
+            "value": round(worst_laps, 4),
+        }
+        assert "Leaderboard metrics:" in results["output"]
+        assert f"- All Spawns, No Crumbs (Laps): {round(worst_laps, 4)}" in results["output"]
+    else:
+        assert results["leaderboard"] == []
+
+
+@pytest.mark.parametrize(
+    ("problem", "diagnostic"),
+    [
+        ("missing_manifest", "expected formula110-submission.json"),
+        ("invalid_json", "could not read formula110-submission.json"),
+        ("invalid_schema", "unsupported schema"),
+        ("invalid_module_name", "valid controllers.* module"),
+        ("missing_controller", "expected controllers/selected.py"),
+        ("ambiguous_controller", "multiple possible files named selected.py"),
+        ("missing_pyproject", "expected pyproject.toml"),
+        ("ambiguous_pyproject", "multiple possible pyproject.toml files"),
+    ],
+)
+def test_invalid_submission_explains_qualification_and_course_ai_instructions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    qualification_grader: ModuleType,
+    problem: str,
+    diagnostic: str,
+) -> None:
+    grader = qualification_grader
+    monkeypatch.setattr(grader, "SUBMISSION_PATH", tmp_path)
+    manifest = tmp_path / "formula110-submission.json"
+    if problem != "missing_manifest":
+        payload = {"schema_version": 1, "controller_module": "controllers.selected"}
+        if problem == "invalid_schema":
+            payload["schema_version"] = 99
+        elif problem == "invalid_module_name":
+            payload["controller_module"] = "selected.py"
+        manifest.write_text("{" if problem == "invalid_json" else json.dumps(payload), encoding="utf-8")
+    if problem == "ambiguous_controller":
+        for folder in ("first", "second"):
+            controller = tmp_path / folder / "controllers" / "selected.py"
+            controller.parent.mkdir(parents=True)
+            controller.write_text("", encoding="utf-8")
+    elif problem in {"missing_pyproject", "ambiguous_pyproject"}:
+        controller = tmp_path / "controllers" / "selected.py"
+        controller.parent.mkdir()
+        controller.write_text("", encoding="utf-8")
+        if problem == "ambiguous_pyproject":
+            for folder in ("first", "second"):
+                project = tmp_path / folder / "pyproject.toml"
+                project.parent.mkdir()
+                project.write_text("", encoding="utf-8")
+
+    def must_not_execute(*args: object, **kwargs: object) -> None:
+        pytest.fail("invalid submission must fail before dependencies or controllers execute")
+
+    monkeypatch.setattr(grader, "run_command", must_not_execute)
+    monkeypatch.setattr(grader, "validate_control", must_not_execute)
+    results = grader.grade()
+
+    assert results["tests"][0]["score"] == 0.0
+    assert results["tests"][0]["max_score"] == 100.0
+    assert results["tests"][0]["status"] == "failed"
+    assert results["leaderboard"] == []
+    for feedback in (results["output"], results["tests"][0]["output"]):
+        assert feedback.startswith("NOT QUALIFIED FOR THE F110 EVENT")
+        assert "All Spawns, No Crumbs >= 2.0" in feedback
+        assert "EX99 - Formula110 Qualifying" in feedback
+        assert "Course AI under Resources > Exercises" in feedback
+        assert diagnostic in feedback
 
 
 def test_trial_summary_prints_seed_serial_numbers() -> None:
@@ -609,7 +730,7 @@ def test_missing_eligible_laps_do_not_receive_false_winning_values() -> None:
     assert all(isinstance(value, (int, float)) for value in values.values())
 
 
-def test_qualified_controller_without_laps_still_appears_on_leaderboard() -> None:
+def test_eligible_controller_without_laps_still_appears_on_leaderboard() -> None:
     grader = load_grader()
     trials: list[dict[str, object]] = [
         {

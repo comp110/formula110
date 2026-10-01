@@ -1,5 +1,25 @@
 # Third-Party Audio Provenance
 
+## f1_start_light_beep.wav
+
+- Source: `F1 start`, a community upload by TyLenol32 on Voicemod Tuna
+- Page: https://tuna.voicemod.net/sound/6371c440-a5e2-43f7-af25-8142a778d726
+- Public audio: https://content-storage.voicemod.net/d724c68ee9a492762ef2d3756f2360f60961b1fa1430b805857a6676501cb77f
+- Retrieved: 2026-09-28
+- The uploader describes it as F1 starting lights. Official Formula 1
+  provenance and a separate redistribution license are not established by this page.
+
+The downloaded MP3 is decoded to 16-bit PCM WAV with macOS `afconvert`.
+`scripts/process_start_light_beep.py` extracts 0.735–1.105 seconds (one beep),
+mixes to mono, removes DC offset, normalizes to 85% peak, and applies short
+edge fades. The packaged 48 kHz WAV plays once per red light; the source
+recording is not packaged. To reproduce after downloading the MP3:
+
+```sh
+afconvert -f WAVE -d LEI16 f1-start-source.mp3 f1-start-source.wav
+python scripts/process_start_light_beep.py f1-start-source.wav src/racing/assets/audio/f1_start_light_beep.wav
+```
+
 ## formula_engine_body_loop.wav
 
 This formula engine layer is an original generated audio asset created by

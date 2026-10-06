@@ -126,7 +126,7 @@ def test_selected_car_survives_camera_cycle_back_to_helicopter(include_split: bo
     rig = CameraRig()
     rig.select_follow_car("heat-2:0")
     visited_views: list[CameraView] = []
-    for _ in range(7 if include_split else 6):
+    for _ in range(8 if include_split else 7):
         update_camera_cycle(rig, cycle_key_down=True, include_split=include_split)
         visited_views.append(rig.view)
         assert rig.selected_car_id == "heat-2:0"

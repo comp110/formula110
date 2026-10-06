@@ -16,7 +16,7 @@ from racing.graphics.camera_transition import CameraViewTransition, blend_orient
 @pytest.mark.parametrize(("key", "view"), [
     ("q", CameraView.CINEMATIC), ("w", CameraView.TOP_DOWN), ("e", CameraView.THREE_QUARTER),
     ("r", CameraView.HELICOPTER), ("t", CameraView.DRONE), ("y", CameraView.SPLIT_FOLLOW),
-    ("u", CameraView.FOLLOW),
+    ("u", CameraView.FOLLOW), ("a", CameraView.LEADERS),
 ])
 def test_requested_shortcuts_preserve_selection(key: str, view: CameraView) -> None:
     rig = CameraRig(view=CameraView.FOLLOW, selected_car_id="heat-2:0")
@@ -85,25 +85,25 @@ def _destination(fixture: SimpleNamespace, x: float = 20) -> None:
     fixture.node.node().setLens(fixture.perspective)
 
 
-def test_transition_starts_continuously_and_finishes_exactly_at_one_second() -> None:
+def test_directed_transition_starts_continuously_and_finishes_exactly_at_three_seconds() -> None:
     f = _fixture()
-    f.transition.begin(CameraView.DRONE)
+    f.transition.begin(CameraView.DRONE, duration_seconds=3.0)
     _destination(f)
     f.transition.apply(0, (f.target,))
     assert tuple(f.camera.getPos()) == pytest.approx((0, 0, -50))
     assert f.transition.active
 
-    f.transition.begin(CameraView.DRONE)
+    f.transition.begin(CameraView.DRONE, duration_seconds=3.0)
     _destination(f)
-    f.transition.apply(0.5, (f.target,))
+    f.transition.apply(1.5, (f.target,))
     assert tuple(f.camera.getPos()) == pytest.approx((10, 0, -30))
     matrix = f.node.node().getLens().getProjectionMat()
     assert all(isfinite(matrix.getCell(r, c)) for r in range(4) for c in range(4))
     assert f.core.Mat4(matrix).invertInPlace()
 
-    f.transition.begin(CameraView.DRONE)
+    f.transition.begin(CameraView.DRONE, duration_seconds=3.0)
     _destination(f, x=24)  # Destination keeps tracking a moving car.
-    f.transition.apply(0.5, (f.target,))
+    f.transition.apply(1.5, (f.target,))
     assert not f.transition.active
     assert tuple(f.camera.getPos()) == pytest.approx((24, 0, -10))
     assert f.node.node().getLens() == f.perspective
@@ -111,23 +111,23 @@ def test_transition_starts_continuously_and_finishes_exactly_at_one_second() -> 
 
 def test_rapid_switch_starts_from_displayed_pose_and_same_view_does_not_restart() -> None:
     f = _fixture()
-    f.transition.begin(CameraView.DRONE)
+    f.transition.begin(CameraView.DRONE, duration_seconds=3.0)
     _destination(f)
     f.transition.apply(0.2, (f.target,))
     displayed = tuple(f.camera.getPos())
-    f.transition.begin(CameraView.FOLLOW)
+    f.transition.begin(CameraView.FOLLOW, duration_seconds=3.0)
     _destination(f, 60)
     f.transition.apply(0, (f.target,))
     assert tuple(f.camera.getPos()) == pytest.approx(displayed)
-    for _ in range(60):
-        f.transition.begin(CameraView.FOLLOW)
+    for _ in range(180):
+        f.transition.begin(CameraView.FOLLOW, duration_seconds=3.0)
         _destination(f, 60)
         f.transition.apply(1 / 60, (f.target,))
     assert not f.transition.active
     assert tuple(f.camera.getPos()) == pytest.approx((60, 0, -10))
 
 
-def test_split_regions_open_and_close_with_the_camera_transition() -> None:
+def test_split_regions_cut_open_and_closed_immediately() -> None:
     f = _fixture()
     right_transform = f.scene.attachNewNode("right-transform")
     right_transform.setPos(30, 0, -10)
@@ -135,34 +135,29 @@ def test_split_regions_open_and_close_with_the_camera_transition() -> None:
     right_camera.node().setLens(f.perspective.makeCopy())
     right_region = _Region((0.5, 1, 0, 1))
     split = SimpleNamespace(right_transform=right_transform, right_camera=right_camera, right_region=right_region)
-    for delta, expected in ((0, 1), (0.5, 0.75), (0.5, 0.5)):
-        f.transition.begin(CameraView.SPLIT_FOLLOW, split=True)
-        _destination(f)
-        f.camera.display_region.setDimensions(0, 0.5, 0, 1)
-        f.perspective.setAspectRatio(5 / 6)
-        right_camera.node().getLens().setAspectRatio(5 / 6)
-        right_region.setDimensions(0.5, 1, 0, 1)
-        right_region.setActive(True)
-        f.transition.apply(delta, (f.target, f.target), split)
-        assert f.camera.display_region.getRight() == pytest.approx(expected)
-        assert right_region.getLeft() == pytest.approx(expected)
-        matrix = f.node.node().getLens().getProjectionMat()
-        assert matrix.getCell(1, 1) / matrix.getCell(0, 0) == pytest.approx(5 / 3 * expected)
-    for delta, expected in ((0.5, 0.75), (0.5, 1)):
-        f.transition.begin(CameraView.DRONE)
-        _destination(f)
-        f.camera.display_region.setDimensions(0, 1, 0, 1)
-        right_region.setActive(False)
-        f.transition.apply(delta, (f.target,), split)
-        assert f.camera.display_region.getRight() == pytest.approx(expected)
-        assert right_region.isActive() == (expected < 1)
+    f.transition.begin(CameraView.SPLIT_FOLLOW, split=True)
+    _destination(f)
+    f.camera.display_region.setDimensions(0, 0.5, 0, 1)
+    f.perspective.setAspectRatio(5 / 6)
+    right_camera.node().getLens().setAspectRatio(5 / 6)
+    f.transition.apply(0, (f.target, f.target), split)
+    assert f.camera.display_region.getRight() == 0.5
+    assert right_region.getLeft() == 0.5
+    assert not f.transition.active
+    f.transition.begin(CameraView.DRONE)
+    _destination(f)
+    f.camera.display_region.setDimensions(0, 1, 0, 1)
+    right_region.setActive(False)
+    f.transition.apply(0, (f.target,), split)
+    assert f.camera.display_region.getRight() == 1
+    assert not right_region.isActive()
     assert not f.transition.active
     assert f.node.node().getLens() == f.perspective
 
 
 def test_reset_clears_animation_and_restores_real_lens() -> None:
     f = _fixture()
-    f.transition.begin(CameraView.DRONE)
+    f.transition.begin(CameraView.DRONE, duration_seconds=3.0)
     _destination(f)
     f.transition.apply(0.1, (f.target,))
     f.transition.reset()
@@ -177,3 +172,18 @@ def test_orientation_handles_opposite_quaternion_signs() -> None:
     assert blend_orientation((1, 0, 0, 0), (-1, 0, 0, 0), 0.5) == pytest.approx((1, 0, 0, 0))
     q = blend_orientation((0.01, 0, 0.99995, 0), (-0.01, 0, 0.99995, 0), 0.5)
     assert q == pytest.approx((0, 0, 1, 0))
+
+
+def test_manual_view_switch_cuts_immediately_and_cancels_directed_transition() -> None:
+    f = _fixture()
+    f.transition.begin(CameraView.DRONE, duration_seconds=3.0)
+    _destination(f)
+    f.transition.apply(1, (f.target,))
+    assert f.transition.active
+    f.transition.begin(CameraView.FOLLOW)
+    _destination(f, 60)
+    f.transition.apply(0, (f.target,))
+    assert not f.transition.active
+    assert f.transition.progress == 1
+    assert tuple(f.camera.getPos()) == pytest.approx((60, 0, -10))
+    assert f.node.node().getLens() == f.perspective

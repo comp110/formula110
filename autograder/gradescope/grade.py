@@ -28,6 +28,12 @@ CONTROL_VALIDATION_TIMEOUT_SECONDS = 35.0
 MODULE_NAME_PATTERN = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")
 METRIC_ZERO_EPSILON = 1e-9
 METERS_PER_SECOND_TO_MILES_PER_HOUR = 2.2369362920544
+QUALIFICATION_MIN_LAPS = 2.0
+QUALIFICATION_TEST_NAME = "F110 event qualification: All Spawns, No Crumbs >= 2.0"
+SUBMISSION_INSTRUCTIONS = (
+    "For the required submission structure and export/upload steps, follow the "
+    "EX99 - Formula110 Qualifying instructions on Course AI under Resources > Exercises."
+)
 LEADERBOARD_METRIC_NAMES = (
     "All Spawns, No Crumbs (Laps)",
     "Clock It (s)",
@@ -411,6 +417,40 @@ def brake_free_lap(lap: dict[str, Any]) -> bool:
     return not bool(lap["brake_applied"])
 
 
+def all_spawns_no_crumbs(trials: list[dict[str, Any]], duration_seconds: float) -> float | None:
+    """Return unrounded worst-spawn progress only when every run is eligible."""
+    qualified = all_trials(
+        trials,
+        lambda trial: (
+            completed_with_forward_progress(trial, duration_seconds)
+            and bool(trial["survived"])
+            and float(trial["damage"]) < 1.0
+        ),
+    )
+    if not qualified:
+        return None
+    return min(float(trial["partial_laps"]) for trial in trials)
+
+
+def qualification_feedback(endurance: float | None, duration_seconds: float, starting_offsets: int) -> str:
+    """Explain the event cutoff and the driving behavior it measures."""
+    passed = endurance is not None and endurance >= QUALIFICATION_MIN_LAPS
+    status = "QUALIFIED FOR THE F110 EVENT" if passed else "NOT QUALIFIED FOR THE F110 EVENT"
+    value = str(endurance) if endurance is not None else "N/A (all required runs must complete successfully)"
+    return (
+        f"{status}\n\n"
+        f"To qualify for the F110 event, your submission must meet the minimum qualification: "
+        f"All Spawns, No Crumbs >= {QUALIFICATION_MIN_LAPS:.1f}.\n"
+        f"This metric is the LOWEST penalty-adjusted lap progress across {starting_offsets} runs, "
+        f"each lasting {duration_seconds:g} simulated seconds and starting at a different position "
+        "on the same track. Your controller must complete the full run and make at least "
+        f"{QUALIFICATION_MIN_LAPS:.1f} laps of forward progress from EVERY starting position, "
+        "after marshal recovery penalties. Each run must finish without controller errors, "
+        "elimination, or reaching 100% damage. Minor damage or wall contact is allowed.\n"
+        f"Your All Spawns, No Crumbs: {value}. Qualification uses unrounded progress."
+    )
+
+
 def leaderboard_for(trials: list[dict[str, Any]], duration_seconds: float) -> tuple[list[dict[str, Any]], str]:
     qualified = all_trials(
         trials,
@@ -463,57 +503,43 @@ def leaderboard_for(trials: list[dict[str, Any]], duration_seconds: float) -> tu
     return leaderboard, f"Leaderboard: qualified; metrics aggregate {len(trials)} starting offsets."
 
 
+def submission_failure_results(message: str, config: dict[str, Any], started: float) -> dict[str, Any]:
+    """Keep qualification and resubmission guidance visible for invalid uploads."""
+    output = "\n\n".join(
+        [
+            qualification_feedback(None, float(config["duration_seconds"]), len(config["seeds"])),
+            SUBMISSION_INSTRUCTIONS,
+            message[-3000:],
+        ]
+    )
+    results = blank_results(output)
+    results["execution_time"] = round(time.monotonic() - started, 3)
+    results["tests"] = [
+        test_case(QUALIFICATION_TEST_NAME, False, float(config["rubric"]["event_qualification"]), output, "1")
+    ]
+    return results
+
+
 def grade() -> dict[str, Any]:
     started = time.monotonic()
     config = read_config()
     manifest_name = str(config["submission_manifest"])
     controller_name, manifest_message = read_submission_controller(manifest_name)
-    points = float(config["rubric"]["completion_with_forward_progress"])
+    points = float(config["rubric"]["event_qualification"])
     if controller_name is None:
-        results = blank_results(manifest_message)
-        results["execution_time"] = round(time.monotonic() - started, 3)
-        results["tests"] = [
-            test_case(
-                "Controller completes 30-second runs with forward progress",
-                False,
-                points,
-                manifest_message,
-                "1",
-            )
-        ]
-        return results
+        return submission_failure_results(manifest_message, config, started)
 
     controller_file, controller_location = locate_module(controller_name)
     if controller_file is None:
-        results = blank_results(f"{manifest_message}\n{controller_location}")
-        results["execution_time"] = round(time.monotonic() - started, 3)
-        results["tests"] = [
-            test_case(
-                "Controller completes 30-second runs with forward progress",
-                False,
-                points,
-                controller_location,
-                "1",
-            )
-        ]
-        return results
+        return submission_failure_results(f"{manifest_message}\n{controller_location}", config, started)
 
     dependencies_synced, dependency_message = sync_submission_dependencies()
     if not dependencies_synced:
-        results = blank_results(
-            "Submission dependency installation failed before controller execution.\n\n" + dependency_message
+        return submission_failure_results(
+            "Submission dependency installation failed before controller execution.\n\n" + dependency_message,
+            config,
+            started,
         )
-        results["execution_time"] = round(time.monotonic() - started, 3)
-        results["tests"] = [
-            test_case(
-                "Controller completes 30-second runs with forward progress",
-                False,
-                points,
-                dependency_message,
-                "1",
-            )
-        ]
-        return results
 
     function_name = str(config["control_function"])
     seeds = [int(seed) for seed in config["seeds"]]
@@ -547,13 +573,17 @@ def grade() -> dict[str, Any]:
         ]
     )
     summary = trial_summary(controller_name, trials)
-    passed = all_trials(trials, lambda trial: completed_with_forward_progress(trial, duration))
+    endurance = all_spawns_no_crumbs(trials, duration)
+    passed = endurance is not None and endurance >= QUALIFICATION_MIN_LAPS
+    qualification_output = qualification_feedback(endurance, duration, len(seeds))
+    if validation.get("ok") is not True:
+        qualification_output += f"\n\n{SUBMISSION_INSTRUCTIONS}"
     tests = [
         test_case(
-            "Controller completes 30-second runs with forward progress",
+            QUALIFICATION_TEST_NAME,
             passed,
             points,
-            summary,
+            f"{qualification_output}\n\n{summary[-3000:]}",
             "1",
         )
     ]
@@ -561,7 +591,10 @@ def grade() -> dict[str, Any]:
     leaderboard_output = leaderboard_report(leaderboard, leaderboard_message)
     return {
         "execution_time": round(time.monotonic() - started, 3),
-        "output": (f"Submission: {manifest_message}\nController: {controller_location}\n\n{leaderboard_output}"),
+        "output": (
+            f"{qualification_output}\n\n"
+            f"Submission: {manifest_message}\nController: {controller_location}\n\n{leaderboard_output}"
+        ),
         "output_format": "text",
         "test_output_format": "text",
         "test_name_format": "text",

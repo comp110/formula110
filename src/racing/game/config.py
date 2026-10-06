@@ -32,6 +32,7 @@ class CameraView(Enum):
     DRONE = "drone"
     HELICOPTER = "helicopter"
     CINEMATIC = "cinematic"
+    LEADERS = "leaders"
     FOLLOW = "follow"
     FOLLOW_CAR = "follow_car"
     SPLIT_FOLLOW = "split_follow"

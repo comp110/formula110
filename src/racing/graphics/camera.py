@@ -9,6 +9,7 @@ from typing import Any, TypeAlias
 
 from racing.game.config import CameraView
 from racing.graphics.cinematic import CinematicCar, CinematicDirector, CinematicPose
+from racing.graphics.leaders import LeadersCamera
 from racing.graphics.track_rendering import (
     TRACK_EDGE_BUFFER,
     TRACK_SURFACE_Y,
@@ -18,6 +19,7 @@ from racing.graphics.track_rendering import (
 )
 from racing.race.progress import TrackProgressModel, project_track_position, track_pose_at_distance
 from racing.race.start import GRID_CAMERA_TRANSITION_SECONDS
+from racing.race.timing import TimingStanding
 from racing.track.spatial import node_position, track_forward_vector
 from racing.track.world import TRACK_SCALE, TRACK_WIDTH, TrackPoint, sampled_track_centerline, track_bounds
 
@@ -70,6 +72,7 @@ PERSPECTIVE_NEAR_CLIP_MAX_M = 10.0
 PERSPECTIVE_NEAR_CLIP_HEIGHT_FRACTION = 0.05
 FollowForwardSample: TypeAlias = tuple[float, float, float]
 CAMERA_VIEW_SHORTCUTS: dict[str, CameraView] = {
+    "a": CameraView.LEADERS,
     "q": CameraView.CINEMATIC,
     "w": CameraView.TOP_DOWN,
     "e": CameraView.THREE_QUARTER,
@@ -99,12 +102,13 @@ class CameraRig:
     helicopter_look_at: tuple[float, float, float] | None = None
     helicopter_target_position: tuple[float, float, float] | None = None
     cinematic: CinematicDirector = field(default_factory=CinematicDirector)
+    leaders: LeadersCamera = field(default_factory=LeadersCamera)
 
     def select_follow_car(self, car_id: str | None) -> None:
         """Keep the current focused view; a second click on its car moves closer."""
         view = self.view
         if car_id is not None:
-            if view in (CameraView.TOP_DOWN, CameraView.THREE_QUARTER, CameraView.CINEMATIC):
+            if view in (CameraView.TOP_DOWN, CameraView.THREE_QUARTER, CameraView.CINEMATIC, CameraView.LEADERS):
                 view = CameraView.HELICOPTER
             elif car_id == self.selected_car_id and view is not CameraView.SPLIT_FOLLOW:
                 view = CameraView.FOLLOW
@@ -123,6 +127,7 @@ class CameraRig:
         self.helicopter_look_at = None
         self.helicopter_target_position = None
         self.cinematic = CinematicDirector()
+        self.leaders = LeadersCamera()
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +197,8 @@ def next_camera_view(view: CameraView, *, include_split: bool = False) -> Camera
     if view is CameraView.HELICOPTER:
         return CameraView.CINEMATIC
     if view is CameraView.CINEMATIC:
+        return CameraView.LEADERS
+    if view is CameraView.LEADERS:
         return CameraView.FOLLOW
     if view is CameraView.FOLLOW and include_split:
         return CameraView.SPLIT_FOLLOW
@@ -240,6 +247,10 @@ def apply_camera_view(
     cinematic_cars: tuple[CinematicCar, ...] = (),
     cinematic_grid: bool = False,
     grid_intro_seconds: float | None = None,
+    leader_standings: tuple[TimingStanding, ...] = (),
+    leader_left_edge: float = -0.6,
+    finishing: bool = False,
+    finish_points: tuple[tuple[float, float, float], ...] = (),
 ) -> None:
     """Move the Ursina camera to match the requested simulator view."""
     camera_frame = _track_camera_frame(None if track_model is None else track_model.points)
@@ -289,7 +300,7 @@ def apply_camera_view(
         apply_helicopter_camera_view(ursina=ursina, target=target, rig=rig, delta_seconds=delta_seconds)
         return
 
-    if view is CameraView.CINEMATIC:
+    if view in (CameraView.CINEMATIC, CameraView.LEADERS):
         director = rig.cinematic if rig is not None else CinematicDirector()
         if not cinematic_cars:
             x, y, z = node_position(target)
@@ -299,10 +310,17 @@ def apply_camera_view(
                 track_distance_m=0.0 if projection is None else projection.progress_distance_m,
                 heading_degrees=float(target.getH()),
             ),)
-        pose = director.update(
-            cinematic_cars, delta_seconds=delta_seconds, aspect_ratio=viewport_aspect, track_model=track_model,
-            grid=cinematic_grid,
-        )
+        if view is CameraView.LEADERS:
+            leaders = rig.leaders if rig is not None else LeadersCamera()
+            pose = leaders.update(
+                cinematic_cars, leader_standings, delta_seconds=delta_seconds, aspect_ratio=viewport_aspect,
+                track_model=track_model, left_edge=leader_left_edge, finishing=finishing, finish_points=finish_points,
+            )
+        else:
+            pose = director.update(
+                cinematic_cars, delta_seconds=delta_seconds, aspect_ratio=viewport_aspect, track_model=track_model,
+                grid=cinematic_grid,
+            )
         if pose is not None:
             if grid_intro_seconds is not None and grid_intro_seconds < GRID_CAMERA_TRANSITION_SECONDS:
                 pose = starting_grid_camera_pose(

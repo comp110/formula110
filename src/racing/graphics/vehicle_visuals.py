@@ -329,16 +329,6 @@ def _add_formula_visuals(
         material=assets.black_plastic_material,
         color=(0.004, 0.004, 0.005, 1),
     )
-    lit_entity(
-        ursina,
-        parent=robot.chassis_np,
-        model="sphere",
-        position=(0.0, 0.322, -0.145),
-        scale=(0.115, 0.075, 0.115),
-        material=assets.glass_material,
-        color=(0.010, 0.012, 0.014, 1),
-        unlit=True,
-    )
     _add_formula_cockpit_details(
         ursina=ursina,
         parent=robot.chassis_np,

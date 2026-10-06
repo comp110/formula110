@@ -1,4 +1,4 @@
-"""One-second transitions between scene cameras and viewport layouts."""
+"""Cut between camera views, with opt-in transitions for directed race moments."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any, cast
 from racing.game.config import CameraView
 from racing.graphics.split_screen import SplitScreenCameras
 
-CAMERA_TRANSITION_SECONDS = 1.0
+CAMERA_TRANSITION_SECONDS = 0.0
 
 
 def blend_orientation(
@@ -59,24 +59,26 @@ class CameraViewTransition:
         )}
         self._key: tuple[CameraView, bool] | None = None
         self._elapsed = CAMERA_TRANSITION_SECONDS
+        self._duration = CAMERA_TRANSITION_SECONDS
         self._sources: dict[str, _Frame] = {}
         self._destinations: dict[str, _Frame] = {}
         self._displayed: dict[str, _Frame] = {}
 
     @property
     def active(self) -> bool:
-        return self._elapsed < CAMERA_TRANSITION_SECONDS
+        return self._elapsed < self._duration
 
     @property
     def progress(self) -> float:
-        return self._elapsed / CAMERA_TRANSITION_SECONDS
+        return self._elapsed / self._duration if self._duration > 0 else 1.0
 
-    def begin(self, view: CameraView, *, split: bool = False) -> None:
+    def begin(self, view: CameraView, *, split: bool = False, duration_seconds: float = 0.0) -> None:
         """Call before calculating this frame's destination camera poses."""
         key = (view, split)
         if self._key is not None and key != self._key and self._displayed:
             # A rapid second switch starts from the currently displayed pose.
             self._sources = self._displayed.copy()
+            self._duration = max(0.0, duration_seconds)
             self._elapsed = 0.0
         self._key = key
         self._restore_destination_lenses()
@@ -86,6 +88,7 @@ class CameraViewTransition:
         self._restore_destination_lenses()
         self._key = None
         self._elapsed = CAMERA_TRANSITION_SECONDS
+        self._duration = CAMERA_TRANSITION_SECONDS
         self._sources.clear()
         self._destinations.clear()
         self._displayed.clear()
@@ -104,9 +107,9 @@ class CameraViewTransition:
             name: self._capture(pane, targets_by_pane[name]) for name, pane in self._panes.items()
         }
         if self.active:
-            self._elapsed = min(CAMERA_TRANSITION_SECONDS, self._elapsed + max(0.0, delta_seconds))
-            if self._elapsed >= CAMERA_TRANSITION_SECONDS - 1e-9:
-                self._elapsed = CAMERA_TRANSITION_SECONDS
+            self._elapsed = min(self._duration, self._elapsed + max(0.0, delta_seconds))
+            if self._elapsed >= self._duration - 1e-9:
+                self._elapsed = self._duration
             amount = self.progress**2 * (3 - 2 * self.progress)
             if self.active:
                 for name, pane in self._panes.items():

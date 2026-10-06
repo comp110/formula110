@@ -34,6 +34,7 @@ from racing.graphics.camera import (
 from racing.graphics.camera_transition import CameraViewTransition
 from racing.graphics.cinematic import CinematicCar
 from racing.graphics.colors import starting_grid_colors
+from racing.graphics.leaders import FINISH_CAMERA_TRANSITION_SECONDS, FinishCameraSequence
 from racing.graphics.lighting import add_lighting, add_showcase_lighting
 from racing.graphics.panda_config import (
     configure_panda_antialiasing,
@@ -137,7 +138,7 @@ from racing.sound.audio import (
     update_audio_mute_key,
 )
 from racing.student.api import RobotCommand, RobotController
-from racing.track.world import TRACK_ID_MUGELLO_SHORT, TrackPoint
+from racing.track.world import TRACK_ID_MUGELLO_SHORT, TRACK_WIDTH, TrackPoint
 
 PLAYABLE_MAX_FRAME_DELTA_SECONDS = 0.25
 PLAYABLE_MAX_FIXED_STEPS_PER_FRAME = 8
@@ -764,6 +765,8 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
     app.racing_camera_rig = camera_rig
     camera_transition = CameraViewTransition(ursina)
     app.racing_camera_transition = camera_transition
+    finish_camera = FinishCameraSequence()
+    app.racing_finish_camera = finish_camera
 
     hud_parent = ursina.application.base.aspect2d
     hud_aspect_ratio = float(ursina.window.aspect_ratio)
@@ -851,13 +854,22 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
         if marker_view is not camera_rig.view:
             position_markers.hide()
             right_position_markers.hide()
+            camera_transition.reset()
             marker_view = camera_rig.view
+        was_pulling_back = finish_camera.pulling_back
+        finish_count = len(lap_race.finish_times) if lap_race is not None else 0
+        finish_camera.advance(finish_count, delta_seconds)
+        pullback = camera_rig.view is CameraView.LEADERS and finish_camera.pulling_back
+        effective_view = CameraView.TOP_DOWN if pullback else camera_rig.view
+        transition_delta = 0.0 if pullback and not was_pulling_back else delta_seconds
         split_ids = (
             split_follow_targets(timing_rows(), camera_rig.selected_car_id)
             if camera_rig.view is CameraView.SPLIT_FOLLOW else None
         )
         split = split_ids is not None and split_ids[1] is not None
-        camera_transition.begin(camera_rig.view, split=split)
+        camera_transition.begin(
+            effective_view, split=split, duration_seconds=FINISH_CAMERA_TRANSITION_SECONDS if pullback else 0.0,
+        )
         if split:
             assert split_ids is not None and split_ids[1] is not None
             if split_cameras is None:
@@ -923,7 +935,7 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
                               if _race_viewer_car_id(entry) == split_ids[0])
             apply_camera_view(
                 ursina=ursina,
-                view=CameraView.DRONE if split_ids is not None else camera_rig.view,
+                view=CameraView.DRONE if split_ids is not None else effective_view,
                 target=target.robot.chassis_np,
                 rig=camera_rig,
                 delta_seconds=delta_seconds,
@@ -931,12 +943,24 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
                 track_model=model,
                 cinematic_cars=(
                     _cinematic_race_cars(entries=entries, runtimes=tuple(runtimes), standings=timing_rows())
-                    if camera_rig.view is CameraView.CINEMATIC else ()
+                    if camera_rig.view in (CameraView.CINEMATIC, CameraView.LEADERS) else ()
                 ),
                 cinematic_grid=not start_sequence.racing or start_sequence.visible,
                 grid_intro_seconds=start_sequence.countdown_elapsed_seconds if config.starting_grid else None,
+                leader_standings=tuple(
+                    replace(row, gap_seconds=race_timing.gap_to(row.car_id, timing_rows()[0].car_id))
+                    if row.gap_seconds is None and timing_rows() else row for row in timing_rows()
+                ),
+                leader_left_edge=(timing_tower.right_edge + 0.10) / float(ursina.camera.aspect_ratio),
+                finishing=finish_count > 0,
+                finish_points=tuple(
+                    (start_finish_progress_pose.position.x + lateral * cos(radians_heading), 0.1,
+                     start_finish_progress_pose.position.z - lateral * sin(radians_heading))
+                    for radians_heading in (start_finish_progress_pose.heading_degrees * pi / 180.0,)
+                    for lateral in (-TRACK_WIDTH / 2, TRACK_WIDTH / 2)
+                ),
             )
-            camera_transition.apply(delta_seconds, (target.robot.chassis_np,), split_cameras)
+            camera_transition.apply(transition_delta, (target.robot.chassis_np,), split_cameras)
             if camera_transition.active:
                 for runtime in runtimes:
                     if isinstance(runtime.label, HeadToHeadCarLabel):
@@ -1066,7 +1090,8 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
                 for standing in timing_rows()
             ),
             remaining_seconds=max(0.0, config.round_seconds - race_elapsed_seconds),
-            selected_car_id=None if camera_rig.view is CameraView.CINEMATIC else camera_rig.selected_car_id,
+            selected_car_id=(None if camera_rig.view in (CameraView.CINEMATIC, CameraView.LEADERS)
+                             else camera_rig.selected_car_id),
             clock_text="GRID" if not start_sequence.racing else (None if lap_race is None else lap_race.clock_text),
         )
         for node in (status_background, status_display):
@@ -1109,7 +1134,7 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
         next_race_index: int,
     ) -> tuple[tuple[RaceViewerEntry, ...], tuple[RobotController | None, ...]]:
         """Reset cars, labels, and start/finish art for the next race."""
-        nonlocal race_elapsed_seconds, start_finish_progress_pose, lap_race
+        nonlocal race_elapsed_seconds, start_finish_progress_pose, lap_race, finish_camera
         race_elapsed_seconds = 0.0
         start_sequence.reset(wait_for_start=config.starting_grid)
         start_lights.update(
@@ -1126,6 +1151,8 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
         right_position_markers.hide()
         displayed_colors.clear()
         camera_transition.reset()
+        finish_camera = FinishCameraSequence()
+        app.racing_finish_camera = finish_camera
         camera_rig.reset_follow_history()
         for rig in split_rigs:
             rig.reset_follow_history()
@@ -1231,7 +1258,7 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
         # Only lights-out releases the fixed-step clock: no controllers, physics,
         # damage, lap timing, or marshal time accumulate while waiting on the grid.
         simulation_accumulator_seconds += simulation_delta_seconds
-        while simulation_accumulator_seconds >= config.fixed_delta_seconds:
+        while simulation_accumulator_seconds >= config.fixed_delta_seconds and not round_complete():
             for entry, controller, runtime in zip(entries, controllers, runtimes, strict=True):
                 command = _head_to_head_viewer_command(
                     config=config,
@@ -1299,6 +1326,12 @@ def _build_race_viewer_scene(config: RaceViewerConfig) -> RunnableApp:
         _update_damage_hud_bars(bars=damage_bars, robots=tuple(runtime.robot for runtime in runtimes))
 
         if not round_complete():
+            return
+        # Stop simulation at the official finish, but let the finishing camera
+        # hold and pull back before results cover it (including two-car races).
+        if (camera_rig.view is CameraView.LEADERS and lap_race is not None and len(lap_race.finish_times) >= 2
+                and (not finish_camera.complete or camera_transition.active)):
+            simulation_accumulator_seconds = 0.0
             return
 
         if isinstance(config, HeatViewerConfig):

@@ -114,7 +114,7 @@ def test_zero_delta_holds_the_camera_and_a_stopped_car_eventually_settles() -> N
 def test_camera_cycle_includes_helicopter_once_and_clears_motion(include_split: bool) -> None:
     rig = CameraRig(view=CameraView.TOP_DOWN, selected_car_id="heat-2:0")
     visited: list[CameraView] = []
-    for _ in range(7 if include_split else 6):
+    for _ in range(8 if include_split else 7):
         rig.helicopter_position = (1.0, 2.0, 3.0)
         rig.helicopter_look_at = (4.0, 5.0, 6.0)
         rig.helicopter_target_position = (7.0, 8.0, 9.0)

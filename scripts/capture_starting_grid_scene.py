@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from importlib import import_module
 from math import isclose
 from pathlib import Path
@@ -16,9 +17,11 @@ from racing.game.config import (
     RacingAudioConfig,
     parse_window_size,
 )
-from racing.graphics.camera_transition import CAMERA_TRANSITION_SECONDS
 from racing.graphics.timing_tower import TimingTowerRow, format_timing_gap
+from racing.physics import FORMULA_VEHICLE_PHYSICS_CONFIG
 from racing.race.heat import DEFAULT_HEAT_COLORS, HeatEntrant
+from racing.race.progress import track_pose_at_distance
+from racing.race.runtime import reset_robot_vehicle, seeded_race_start_finish_pose
 from racing.race.timing import TimingSample
 from racing.student.api import RobotCommand, RobotSensors
 
@@ -30,21 +33,25 @@ def main() -> None:
     parser.add_argument("--h2h", action="store_true")
     parser.add_argument("--lap-results", action="store_true", help="verify recorded lap finishes and DNFs")
     parser.add_argument("--split-check", action="store_true", help="verify focus/trailing split cameras and selection")
-    parser.add_argument("--camera-transitions", action="store_true", help="capture one-second camera transitions")
+    parser.add_argument("--camera-cuts", "--camera-transitions", dest="camera_cuts", action="store_true",
+                        help="verify immediate cuts between all camera views")
+    parser.add_argument("--leaders-check", action="store_true", help="verify battle framing and finishing camera")
     parser.add_argument("--audio-check", action="store_true", help="verify M toggles audio without an on-screen label")
     parser.add_argument("--track", default="mugello-short")
     args = parser.parse_args()
-    if args.h2h and args.lap_results:
-        parser.error("--lap-results requires a heat")
+    if args.h2h and (args.lap_results or args.leaders_check):
+        parser.error("lap finishing checks require a heat")
     args.output.mkdir(parents=True, exist_ok=True)
     calls: list[RobotSensors] = []
 
     def controller(sensors: RobotSensors) -> RobotCommand:
         calls.append(sensors)
-        return RobotCommand(throttle=0.0 if args.camera_transitions or args.split_check else 0.5)
+        return RobotCommand(throttle=0.0 if args.camera_cuts or args.split_check or args.leaders_check else 0.5)
 
     names = ("Ada L. & Grace H.", "Jean-Luc P.", "Élodie D. & Alex M.", "Sam R.", "Taylor B. & Jordan C.",
              "Morgan T.", "Jamie K. & Casey W.", "Robin S.", "Christopher A. & Alexandria B.", "Avery J.")
+    if args.leaders_check:
+        names = names[:3]
     if args.audio_check:
         # Exercise the real audio runtime and mute state without playing sound during capture.
         cast(Any, import_module("panda3d.core")).loadPrcFileData("", "audio-library-name null")
@@ -57,7 +64,9 @@ def main() -> None:
         common.update(round_laps=1, race_count=1)
     if args.split_check:
         common.update(camera_view=CameraView.SPLIT_FOLLOW, round_seconds=30.0, race_count=1)
-    if args.camera_transitions:
+    if args.leaders_check:
+        common.update(round_laps=2, race_count=1, camera_view=CameraView.LEADERS)
+    if args.camera_cuts:
         common.update(round_seconds=60.0, race_count=1)
     app = cast(Any, create_head_to_head_viewer_app(HeadToHeadViewerConfig(
         **common, grid_names=names[:2], challenger_name="Blue Lightning", incumbent_name="Apex Hunters",
@@ -154,41 +163,104 @@ def main() -> None:
                 assert sum(value.startswith("DNF") for value in texts) == 2
             print("Verified results fade, participant names, recorded timings, and frozen simulation/camera.")
 
-        if args.camera_transitions:
+        if args.leaders_check:
+            loop.input("space")
+            advance(9.3)
+            race = app.racing_lap_race
+            model = app.racing_track.model
+            line = seeded_race_start_finish_pose(model=model, config=FORMULA_VEHICLE_PHYSICS_CONFIG,
+                                                 random_seed=110, race_index=1)
+            ids = tuple(entry.car_id for entry in app.racing_entries)
+            length = model.total_length_m
+
+            def stage(distances: tuple[float, ...]) -> None:
+                previous = {row.car_id: row.distance_m for row in app.racing_timing.rows}
+                for car_id, runtime, distance in zip(ids, app.racing_runtimes, distances, strict=True):
+                    pose = track_pose_at_distance(model, line.progress_distance_m + distance)
+                    runtime.tracker.unwrapped_progress_distance_m += distance - previous[car_id]
+                    runtime.tracker.last_progress_distance_m = pose.progress_distance_m
+                    reset_robot_vehicle(runtime.robot, position=(pose.position.x, 0.6, pose.position.z),
+                                        heading_degrees=pose.heading_degrees)
+                advance(1 / 60)
+
+            stage((length + 2, length - 12, length - 24))
+            assert not race.finish_times  # Crossing an earlier lap must not lock the camera.
+            assert app.racing_camera_rig.leaders.finish_pose is None
+            stage((2 * length - 2, 2 * length - 14, 2 * length - 26))
+            race.rows = tuple(replace(row, gap_seconds=(0.0, 1.0, 2.9)[i]) for i, row in enumerate(race.rows))
+            ursina.time.dt = 0
+            loop.update()
+            assert len(app.racing_camera_rig.leaders.subject_ids) == 3
+            capture("leaders-01-three-cars")
+            race.rows = tuple(replace(row, gap_seconds=(0.0, 1.0, 3.1)[i]) for i, row in enumerate(race.rows))
+            loop.update()
+            assert len(app.racing_camera_rig.leaders.subject_ids) == 2
+            capture("leaders-02-two-cars")
+            stage((2 * length + 2, 2 * length - 14, 2 * length - 26))
+            assert len(race.finish_times) == 1
+            frozen = (tuple(ursina.camera.position), tuple(ursina.camera.rotation), ursina.camera.fov)
+            capture("leaders-03-winner-finish")
+            stage((2 * length + 45, 2 * length - 10, 2 * length - 26))
+            advance(0.5)
+            assert tuple(ursina.camera.position) == frozen[0]
+            assert all(isclose(a, b, abs_tol=1e-4) for a, b in zip(frozen[1], ursina.camera.rotation, strict=True))
+            assert ursina.camera.fov == frozen[2]
+            assert not app.racing_camera_transition.active
+            app.racing_runtimes[2].robot.eliminated = True
+            stage((2 * length + 45, 2 * length + 2, 2 * length - 26))
+            assert len(race.finish_times) == 2 and race.complete
+            assert not hasattr(app, "racing_result")
+            frozen_time = race.elapsed_seconds
+            call_count = len(calls)
+            advance(59 / 60)
+            assert not app.racing_camera_transition.active
+            assert tuple(ursina.camera.position) == frozen[0]
+            assert all(isclose(a, b, abs_tol=1e-4) for a, b in zip(frozen[1], ursina.camera.rotation, strict=True))
+            assert ursina.camera.fov == frozen[2]
+            capture("leaders-04-second-finish-hold")
+            advance(1 / 60)
+            assert app.racing_camera_transition.active
+            assert app.racing_camera_transition.progress == 0
+            capture("leaders-05-pullback-start")
+            advance(1.5)
+            assert isclose(app.racing_camera_transition.progress, 0.5)
+            assert not hasattr(app, "racing_result")
+            capture("leaders-06-pullback-mid")
+            advance(1.5)
+            assert not app.racing_camera_transition.active
+            assert ursina.camera.orthographic
+            assert abs(float(ursina.camera.getP()) + 90) < 0.001
+            assert len(calls) == call_count and race.elapsed_seconds == frozen_time
+            assert hasattr(app, "racing_result")
+            capture("leaders-07-top-down")
+            advance(1.5)
+            capture("leaders-08-results")
+            print("Verified three/two-car framing, final-lap winner lock, stationary finish shot, "
+                  "one-second P2 hold, three-second top-down pullback, stopped physics, and delayed results.")
+            return
+
+        if args.camera_cuts:
             loop.input("space")
             advance(9.3)
             transition = app.racing_camera_transition
             for key, view in (
                 ("w", CameraView.TOP_DOWN), ("e", CameraView.THREE_QUARTER), ("r", CameraView.HELICOPTER),
                 ("t", CameraView.DRONE), ("y", CameraView.SPLIT_FOLLOW), ("u", CameraView.FOLLOW),
-                ("q", CameraView.CINEMATIC),
+                ("q", CameraView.CINEMATIC), ("a", CameraView.LEADERS),
             ):
-                before = tuple(ursina.camera.position)
                 loop.input(key)
                 ursina.time.dt = 0
                 loop.update()
                 assert app.racing_camera_rig.view is view
-                assert transition.active and transition.progress == 0
-                assert all(isclose(a, b, abs_tol=1e-4) for a, b in zip(before, ursina.camera.position, strict=True))
-                capture(f"transition-{key}-start")
-                advance(CAMERA_TRANSITION_SECONDS / 2)
-                assert isclose(transition.progress, 0.5)
-                capture(f"transition-{key}-mid")
-                loop.input(key)  # Same view key must not restart animation.
-                advance(CAMERA_TRANSITION_SECONDS / 2)
-                assert not transition.active
+                assert not transition.active and transition.progress == 1
                 assert type(app.cam.node().getLens()).__name__ != "MatrixLens"
-                capture(f"transition-{key}-end")
-            loop.input("w")
-            advance(0.2)
-            before = tuple(ursina.camera.position)
-            loop.input("y")
-            ursina.time.dt = 0
-            loop.update()
-            assert all(isclose(a, b, abs_tol=1e-4) for a, b in zip(before, ursina.camera.position, strict=True))
-            advance(CAMERA_TRANSITION_SECONDS)
-            assert not transition.active
-            print("Verified all seven shortcuts, one-second transitions, repeated keys, and interrupted transitions.")
+                assert ursina.camera.display_region.getRight() == (0.5 if key == "y" else 1.0)
+                capture(f"cut-{key}")
+                before = tuple(ursina.camera.position)
+                loop.input(key)
+                loop.update()
+                assert tuple(ursina.camera.position) == before
+            print("Verified immediate cuts for all eight shortcuts, native lenses, split panes, and repeated keys.")
             return
 
         if args.split_check:
@@ -220,20 +292,20 @@ def main() -> None:
             verify_split_cards()
             capture("split-03-last-place")
             loop.input("w")
-            advance(CAMERA_TRANSITION_SECONDS)
+            advance(1 / 60)
             assert not split.active
             assert ursina.camera.display_region.getRight() == 1.0
             loop.input("y")
-            advance(CAMERA_TRANSITION_SECONDS)
+            advance(1 / 60)
             assert split.active
             assert app.racing_split_target_ids[0] == order[-1]
             # V must include split view in heats as well as h2h.
             loop.input("u")
-            advance(CAMERA_TRANSITION_SECONDS)
+            advance(1 / 60)
             ursina.held_keys["v"] = 1
             advance(1 / 60)
             ursina.held_keys["v"] = 0
-            advance(CAMERA_TRANSITION_SECONDS)
+            advance(1 / 60)
             assert app.racing_camera_rig.view is CameraView.SPLIT_FOLLOW
             tower.auto_button["command"]()
             advance(1.0)
@@ -244,7 +316,7 @@ def main() -> None:
             for entry, runtime in zip(app.racing_entries, app.racing_runtimes, strict=True):
                 if f"{entry.role}:{entry.copy_index}" != order[0]:
                     runtime.robot.eliminated = True
-            advance(CAMERA_TRANSITION_SECONDS)
+            advance(1 / 60)
             assert app.racing_split_target_ids == (order[0], None)
             assert not split.active
             assert ursina.camera.display_region.getRight() == 1.0

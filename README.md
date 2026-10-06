@@ -304,8 +304,28 @@ uv run python scripts/run_submissions.py 429149360 429458989 --seed 110
 ```
 
 The first ID is the challenger and the second is the incumbent. This opens a
-watched, 30-second race in three-quarter view with each controller's `RACING_NAME`
-as its car label. Controllers without a name use their submission ID as a fallback.
+watched, 30-second race with a full-screen starting grid. The grid lists every
+participant (both partners for pairs) as full first name and last initial, alongside
+their car's color and label. Names come from `submission_metadata.yml`; missing
+names fall back to submission IDs. Each controller's `RACING_NAME` remains its
+car label in the smaller race leaderboard; unnamed cars use their submission ID.
+
+Click anywhere or press **Space** to reveal the track. The default cinematic
+camera holds above the entire track for two seconds, then begins the countdown
+and smoothly pans and zooms into the grid
+shot by the third red light, with two lights still to illuminate. Each subsequent
+round returns to the starting grid and waits for another click or Space.
+An explicit `--camera` option still selects another view.
+
+Use `--title` to identify the race in the window and above the starting-grid
+table. The title and table scale together to fill about 90% of the screen height,
+with the table's left edge at the screen midpoint and a large F110 logo centered
+in the left half:
+
+```bash
+uv run python scripts/run_submissions.py 429149360 429458989 --title "Grand Final"
+```
+
 Each submission's `formula110-submission.json` selects its controller; older
 `formula110-exercise-submission.json` exports use their level 3 controller.
 The script also accepts IDs written as `submission_429149360`.
@@ -324,7 +344,7 @@ with `--suppress-student-prints`.
 Every watched race starts with five red lights illuminating one per second,
 each with an F1 starting-light beep. After all five stay lit for 1.5 seconds,
 they go out together and the cars and race clock start. This sequence repeats
-for each round with `--races` and works with two to ten cars. `M` mutes
+for each round with `--races` and works with two to twenty cars. `M` mutes
 the beeps along with the other audio; `--no-audio` keeps the visual countdown.
 Headless runs start immediately without the presentation delay.
 
@@ -352,8 +372,9 @@ by the remaining IDs from front to back. This order is preserved across races.
 Missing names fall back to submission IDs, and missing colors receive distinct
 default paints. A heat runs all its controllers together and ranks their race
 progress. With `--races`, standings use total scored distance across those races.
-The default three-quarter view shows the shared race, and `--camera follow` follows the leader. The
-`split_follow` camera is available only for two-ID head-to-head races.
+The default three-quarter view shows the shared race, and `--camera follow` follows the leader.
+Use `--camera split_follow` to watch the focused car and its closest trailing
+competitor side by side, in either a heat or a head-to-head race.
 
 Car-to-car contact counts toward the marshal's stuck timer only while the
 affected car is moving at 3 mph or less. Faster contact does not add stuck time;
@@ -386,23 +407,36 @@ Use `--camera helicopter` for a distant aerial view that pans toward the selecte
 car while slowly following it. The camera holds a steady world-space angle through
 corners. It follows the leader in AUTO mode and works in single-car, h2h, and heat
 viewers. Press `V` to cycle through top-down, three-quarter, drone, helicopter,
-cinematic, and close follow views (plus split follow in h2h).
+cinematic, leaders, and close follow views (plus split follow in h2h and heats).
 
-Jump directly to a view with the top letter row:
+Jump directly to a view with these keys:
 
 | Key | View |
 | --- | --- |
-| **Q** | Top-down overview |
-| **W** | Three-quarter overview |
-| **E** | Drone |
+| **A** | Leaders / finishing camera |
+| **Q** | Cinematic broadcast |
+| **W** | Top-down overview |
+| **E** | Three-quarter overview |
 | **R** | Helicopter |
-| **T** | Cinematic broadcast |
-| **Y** | Close follow |
-| **U** | Split follow (h2h only) |
+| **T** | Drone |
+| **Y** | Split follow (h2h and heats) |
+| **U** | Close follow |
 
-These shortcuts preserve the selected car. Overview, cinematic, and split views
-keep their usual framing; returning to drone, helicopter, or close follow resumes
+These shortcuts preserve the selected car. Overview, cinematic, and leaders views
+keep their usual framing; returning to drone, helicopter, close follow, or split follow resumes
 the selected car. Pressing the current view's key again leaves its motion uninterrupted.
+Camera shortcuts, **V**, and timing-row selections cut directly to their new
+views, including opening and closing split-screen.
+
+Press **A** or use `--camera leaders` for a drone view that keeps P1 and P2 in
+frame. It includes P3 when its measured gap to P1 is at most three seconds;
+missing timing history keeps the view on P1/P2. Framing adjusts for corners,
+car separation, screen shape, and the timing tower. In a lap-limited race,
+P1's final crossing locks a stationary shot with the finish line in view.
+After P2's final crossing, this shot holds for one second, then smoothly pulls
+out to the full-track top-down view over three seconds. Results wait for this
+sequence to finish if the race has already ended. Manual view changes still
+cut immediately and override the finishing shot.
 
 Use `--camera cinematic` for automatic broadcast coverage. The opening shot
 frames the entire grid through the countdown and lights-out display. It prefers
@@ -433,45 +467,56 @@ uv run python scripts/run_submissions.py 429929224 429859475 \
   --camera split_follow --fullscreen --seed 110
 ```
 
-The challenger stays on the left and the incumbent on the right. Each pane
-follows its team's first car when using multiple copies. Press `v` to cycle
-between this view and the other h2h camera modes; race results and controls stay
-shared across the window. The direct `racing h2h --watch` runner accepts the
-same `--camera split_follow` option.
+The focused car appears on the left, and the closest active competitor behind
+it in race order appears on the right. Automatic targeting follows P1 and P2.
+Click a timing row or press **1**–**0** to change the focus while keeping both
+panes; the trailing car updates as positions change. If the focus is last, the
+other pane follows the nearest active car ahead. With no active competitor
+left, the focus fills the window. Retired cars and DNFs are skipped when choosing
+the companion. Each pane shows only its focused car’s place card, at any race
+position, with its name, color, and a translucent triangle pointing down to the car.
+Press **Y** to open this view directly, or **V** to cycle to it; results and
+controls stay shared across the window. Both `racing h2h --watch` and
+`racing heat --watch` accept `--camera split_follow`.
 
 Watched head-to-head races and heats include a timing tower in the top-left
 corner, with the blue F110 logo, race countdown, positions, and time gaps to the
 car immediately ahead. It shows every entrant, including nine- and ten-car heats.
-Click **Timing [L]** or press **L** to hide or show it.
+Click the **F110 logo** or press **L** to hide or show it.
 Press **1**–**9** to focus the car currently in **P1**–**P9**, or **0** for **P10**,
 just like clicking its leaderboard row. These shortcuts also work with the
 tower hidden. The camera stays with the selected car as positions change;
 press a number again to select whoever occupies that position now. Selecting
-the same car again moves into close follow, just like clicking its row again.
-Floating badges show just the names. The top three also have small `P1`–`P3`
-circles in their car colors, placed as close to their car as available space
-outside the track permits. They hold their screen position for at least 0.75
-seconds, then animate to the next spot over 140 ms using a 0.375-second
-projection along the track. Camera or HUD changes can reposition them sooner
-to keep the track clear.
-Rank labels and shades update immediately, including while circles hold still
-or animate between anchors.
-Circles use contrasting text and thin matching lines pointing to their actual
-cars, with a small gap around each car. Positions follow current track order
-from the shared start/finish line,
-including grid offsets and completed laps. The front of the grid starts P1,
-P2, P3 and keeps those places until passed. Badges and circles disappear when
-a car retires from damage and return when it starts a new race. Retired cars
-move below every active car, ordered with the newest retirement first, and
-active positions close up immediately. Circles hide in split view and on the
-final results screen.
+the same car again moves into close follow, except in split view, which keeps
+both panes focused on the battle.
+Floating badges show just the names. In single-camera views, the top three
+also have `P1`–`P3` cards in a stable row across the top, clear of the timing
+tower. Each card shows the car's name and color with contrasting rank text;
+a translucent triangle points just above the visible car. Split-screen uses
+the same style for each pane's focused car, regardless of its position, and
+omits cards for other cars. Cards and pointers stay inside their own pane.
+Ranks and colors update immediately with the race order. Positions account for
+grid offsets and completed laps from the shared start/finish line. Retired cars
+move below active cars, ordered with the newest retirement first. Cards hide
+when the car is outside the view, behind the HUD, or retired, and during the
+countdown, camera transitions, and final results.
+Audio has no status overlay; press **M** to mute or unmute in any view.
 When cars share a color, the leading car of that color keeps the original shade.
 Matching cars darken by 10% of the original color per overall position behind
 that leader (90%, 80%, and so on, with a 10% brightness floor). Shades update
 with live order across the car paint, name badges, timing rows, and circles.
-The bottom damage bars are hidden in watched races. Final results include total
-damage, summed across races (and across copies in a head-to-head team), so a
-multi-race total can exceed 100%.
+The bottom damage bars are hidden in watched races. At the end, the results
+fade over the finishing scene in 1.5 seconds, using the same layout as the title
+screen: F110 logo on the left, race title and final standings on the right.
+Participant names and car colors carry over from the grid. Lap races show each
+finisher's time, gap to the winner, and DNF classifications. Timed heats show
+scored distance and available timing gaps; head-to-head results show team order
+and best lap times (or elapsed time if no lap was completed). Multi-race heats
+retain the official aggregate order, with placement totals and combined finish
+times for lap races. The results stay visible when the race is over; press
+Escape to exit the viewer.
+Terminal and JSON results also include damage, summed across races (and across
+copies in a head-to-head team), so a multi-race total can exceed 100%.
 
 Add `--no-damage` to `racing h2h`, `racing heat`, or
 `scripts/run_submissions.py` to disable collision damage and damage retirements
@@ -484,10 +529,10 @@ uv run python scripts/run_submissions.py 429929224 429859475 --no-damage
 ```
 
 Click a timing row to focus on that entrant through position changes and
-subsequent races. From top-down, three-quarter, cinematic, or split view, the first click
+subsequent races. From top-down, three-quarter, cinematic, or leaders view, the first click
 opens `helicopter`; clicking the same car again switches to close `follow`.
-Selecting a different car in helicopter, drone, or close follow keeps that view.
-Hiding the tower preserves the selection. **AUTO** restores automatic camera
+Selecting a different car in helicopter, drone, close follow, or split follow keeps that view.
+Hiding the tower preserves the selection. Clicking the **lap counter or race clock** restores automatic camera
 targeting while keeping the current view. **V** cycles views and retains the
 selected car.
 
@@ -590,167 +635,184 @@ shell comments for annotations, so it can also be saved as a shell script.
 
 ### Planning race night from a final export
 
-`scripts/plan_race_night.py` selects five exclusive ten-car groups, searches for
-interesting races, and writes a JSON plan for a future show runner. It allocates
-**Clock It first**, then **Gas Locked In**, **Hits Different**, **Gs Going Crazy**,
-and **Sips Tea**, skipping submissions already assigned above and backfilling
-from each leaderboard. Scores and ranking directions come from current export
-results. A short field is an error; submissions are never duplicated to fill it.
+`scripts/plan_race_night.py` builds five exclusive ten-car category groups,
+optional Juiced exhibition heats, and two independent ten-car Bahrain fields.
+It calibrates lap counts toward 90-second heats and searches for interesting
+track/starting seeds. Every top replay command includes a descriptive `--title`
+for the window and starting-grid display.
 
-Use `--selection-priority lowest` to allocate **Sips Tea first**, followed by
-**Gs Going Crazy**, **Hits Different**, **Gas Locked In**, and **Clock It**.
-Each board still selects its best remaining scores in its normal ranking direction.
-Use separate output paths to compare policies; `highest` remains the default:
+Run the current show search with:
 
 ```bash
-uv run python scripts/plan_race_night.py \
-  --export-dir assignment_8706145_export \
-  --selection-priority lowest \
-  --output artifacts/race-night-lowest-first/plan.json
-```
-
-The JSON records `settings.selection_priority`, `allocation_order`, each group's
-`allocation_rank`, and `skipped_already_assigned` submissions. Show order and
-the rule selecting P1/P2 from each group's best race for Bahrain apply to both policies.
-
-To separate entrants selected by the submission review CSV into a **Juiced**
-exhibition, generate the review for the same export and pass it to the planner:
-
-```bash
-uv run python scripts/review_submissions.py assignment_8706145_export \
-  --csv artifacts/submission_review_scores.csv
-
 uv run python scripts/plan_race_night.py \
   --export-dir assignment_8706145_export \
   --selection-priority lowest \
   --review-csv artifacts/submission_review_scores.csv \
-  --juiced-threshold 0 \
-  --output artifacts/race-night-with-juiced/plan.json
+  --juiced-threshold 2 \
+  --juiced-min-laps 3 \
+  --track-count 10 \
+  --starts-per-track 10 \
+  --fixed-seed-count 100 \
+  --bahrain-seed-count 100 \
+  --calibrate-laps \
+  --target-seconds 90 \
+  --duration-tolerance-seconds 10 \
+  --duration-weight 0.2 \
+  --jobs 8 \
+  --marshal-penalty-m 3 \
+  --marshal-cooldown-seconds 0.5 \
+  --marshal-stuck-seconds 1.0 \
+  --fullscreen \
+  --camera cinematic \
+  --weights 0.4 0.2 0.4 \
+  --output artifacts/race-night-all-spawns-bahrain/plan.json
 ```
 
-The cutoff is strictly **`total_score > threshold`** (default `0`). Every matching
-submission is removed before any of the five categories select or backfill their
-ten cars. These submissions race only in separate Juiced heats, and their
-finishers **never qualify for the Bahrain finale**. The review CSV is optional;
-omitting it keeps the ordinary five-category selection.
+Category allocation uses current export leaderboard results, never history.
+The default `--selection-priority highest` allocates Clock It, Gas Locked In,
+Hits Different, Gs Going Crazy, then Sips Tea. `lowest` reverses that allocation
+order. Each board selects its best remaining scores in its normal ranking
+direction and backfills after earlier allocations and Juiced exclusions.
+Show order always runs from Sips Tea through Clock It, then Juiced and Bahrain.
+A short field is an error; submissions are never duplicated to fill a category.
 
-Juiced heats default to **six laps on procedural tracks**, with the same track
-and starting-seed search as the other procedural stages. Set their format with
-`--juiced-track procedural|mugello-short|bahrain` and `--laps juiced=N`.
-Each heat supports **two through ten entrants**, including a seven-car field.
-All held-out entrants participate; more than ten are split into balanced heats
-without regular-category fillers. Grid order is deterministic by submission ID,
-distributed across heats if needed. A single holdout remains excluded and is
-reported without creating a one-car race.
+Juiced selection requires `total_score >= --juiced-threshold` (default 1),
+**and**, if configured, `all_spawns_no_crumbs_laps >= --juiced-min-laps`.
+The command above uses **score >= 2 AND All Spawns laps >= 3**. Blank lap
+values fail the lap condition. The review CSV must contain `submission_id` and
+`total_score`, plus the lap column when filtering by laps. Missing/blank review
+scores for eligible entrants, duplicate IDs, invalid numbers, and IDs outside
+this export are errors. Additional experience columns are accepted.
 
-Two IDs normally use head-to-head mode in `run_submissions.py`; add `--heat`
-for an individual two-car heat. Planner and scorer replay commands include it
-automatically. Two-car heats earn lead-change and overtake points; the close-finish
-component still requires three actual finishers.
+Juiced entrants are removed before regular category selection and race in
+separate balanced heats of two through ten cars, without regular fillers.
+A single held-out entrant stays excluded and produces a warning instead of a
+one-car heat. Omitting `--review-csv` disables holdouts.
 
-Each Juiced heat gets its own top three configurations, results, team colors,
-and show-runner launch commands. Print its best launch command after the search:
+Bahrain selection starts afresh from the **All Spawns, No Crumbs leaderboard**, independent
+of category allocations and earlier race outcomes:
 
-```bash
-jq -r '.juiced_groups[] | .top_races[0].launch.shell_command' \
-  artifacts/race-night-with-juiced/plan.json
-```
+- **Bahrain - All Spawns, No Crumbs Top 10 (No Juiced)** selects the ten highest
+  lap scores after excluding the Juiced holdouts.
+- **Bahrain - All Spawns, No Crumbs Top 10 (Open, Including Juiced)** selects the
+  ten highest lap scores across everyone, including Juiced entrants.
 
-The planner requires the `submission_id` and `total_score` CSV columns and accepts
-the review script's additional metric columns directly. Missing or blank scores
-for leaderboard-eligible submissions are errors; they are not treated as zero.
-Duplicate IDs, invalid scores, and IDs absent from the export are also errors.
-The CSV contents and cutoff are included in resume validation. Use a fresh
-output path after changing them.
+Scores rank in descending order; ties use ascending submission ID. The metric
+comes from the current export leaderboard, independently of the review CSV.
 
-| Show order | Group | Laps | Search |
-| --- | --- | --- | --- |
-| 1 | Sips Tea (lowest) | 6 | Mugello Short, 50 starting seeds |
-| 2 | Gs Going Crazy (highest) | 6 | Mugello Short, 50 starting seeds |
-| 3 | Hits Different (highest) | 6 | 10 procedural layouts × 5 starting seeds |
-| 4 | Gas Locked In (lowest) | 8 | 10 procedural layouts × 5 starting seeds |
-| 5 | Clock It (lowest) | 10 | 10 procedural layouts × 5 starting seeds |
-| 6 (optional) | Juiced exhibition heat(s) | 6 | 10 procedural layouts × 5 starting seeds |
-| Last | Bahrain finale | 3 | Bahrain, 50 starting seeds |
+Cars can appear in a regular category and either or both Bahrain fields.
+Each Bahrain field runs exactly **three laps** and searches **100 starting
+seeds by default**, for 200 Bahrain trials total.
 
-The finale takes **P1 and P2 from each group's highest-scoring race**, not its
-highest leaderboard qualifiers. It will report a blocked finale if a group's
-best race has fewer than two actual finishers. Each stage reports its top three
-race configurations, full classifications, and actual podium finishers.
+For a twenty-car Bahrain experiment, add `--bahrain-cars 20` and use a new
+output path. This expands both Bahrain fields while retaining ten-car regular
+categories. Bahrain's field size defaults to 10 until specified. The timing
+tower currently displays all entrants together; paging is deferred.
 
-After extracting the deadline export, run:
+Compare running ten- and twenty-car Bahrain races in overhead view:
 
 ```bash
-uv run python scripts/plan_race_night.py \
-  --export-dir assignment_FINAL_export \
-  --output artifacts/race-night-final/plan.json \
-  --marshal-penalty-m 5
-```
-
-Without a holdout, defaults are 300 total trials; each Juiced heat adds 50.
-The planner uses four worker processes, procedural track seeds
-0–9, starting seeds 110–114 per procedural layout, and starting seeds 110–159
-on fixed tracks. Damage is disabled, marshals are enabled, and the finish
-deadline is 10 seconds after P1. Each trial runs in a fresh interpreter with a
-300-second wall-clock timeout.
-
-Useful top-level flags:
-
-- `--track-count`, `--starts-per-track`, `--start-track-seed`, and `--start-seed`
-  control the procedural search. Fixed-track and Bahrain trial counts default
-  to `track-count × starts-per-track`; override them with `--fixed-seed-count`
-  and `--bahrain-seed-count`.
-- `--marshal-penalty-m`, `--marshal-stuck-seconds`, `--marshal-cooldown-seconds`,
-  `--no-marshal`, `--damage` / `--no-damage`, and `--finish-timeout-seconds`
-  apply to **both simulation and replay commands**. Lap races classify actual
-  finishes; meter penalties are recorded but do not change finish positions.
-- Repeat `--laps CATEGORY=N` to override race lengths, for example
-  `--laps clock-it=12 --laps bahrain-finale=3`. Category IDs are `sips-tea`,
-  `gs-going-crazy`, `hits-different`, `gas-locked-in`, `clock-it`, `juiced`, and `bahrain-finale`.
-- `--camera`, `--fullscreen` / `--no-fullscreen`, `--no-music`, `--no-audio`, and
-  `--muted` control generated replay commands. These do not affect headless scores.
-- `--weights LEAD PASS FINISH` and `--finish-gap-scale-seconds` tune the existing
-  interest score. `--jobs` and `--timeout-seconds` control execution.
-
-For a smaller test using all five groups, normal lap counts, and the finale:
-
-```bash
-uv run python scripts/plan_race_night.py \
+uv run python scripts/benchmark_bahrain_race.py \
   --export-dir assignment_8706145_export \
-  --track-count 1 --starts-per-track 3 \
-  --output artifacts/race-night-test/plan.json
+  --counts 10 20 --size 1920x1080 --seconds 20
 ```
 
-This runs 18 trials and retains three alternatives for every stage. Add
-`--plan-only` to inspect selection and team metadata without simulating races.
-Use the same command with `--resume` to continue saved work; `--retry-failed`
-also retries errors/timeouts. Source and rule hashes prevent reusing results
-after changing an export, controller, engine, or race setting. Playback flags
-may change during resume without rerunning physics. Use a new output path for
-tonight's new export or different race rules.
+The benchmark uses the highest All Spawns scores, including Juiced entrants,
+with the same seed, real-time physics, and student controllers in fresh
+processes. It measures uncapped offscreen rendering with audio disabled;
+window/compositor and audio costs are excluded. Results, screenshots, and
+`replay-20.sh` are saved in `artifacts/bahrain-car-count-performance/`.
 
-The output is checkpointed after every completed trial:
+| Show order | Field | Laps | Default seed search |
+| --- | --- | --- | --- |
+| 1 | Sips Tea | Calibrated | 10 procedural layouts × 10 starts |
+| 2 | Gs Going Crazy | Calibrated | 10 procedural layouts × 10 starts |
+| 3 | Hits Different | Calibrated | 10 procedural layouts × 10 starts |
+| 4 | Gas Locked In | Calibrated | 10 procedural layouts × 10 starts |
+| 5 | Clock It (no Juiced) | Calibrated | Default Mugello Short layout × 100 starts |
+| 6 (optional) | Each Juiced exhibition | Calibrated | 10 procedural layouts × 10 starts |
+| Last two | Bahrain without Juiced; Bahrain open | 3 each | 100 starts each |
 
-- **`plan.json`**: versioned source/settings, five `groups`, `juiced_groups`, `holdout`, `finale`, selection
-  exclusions, and each stage's `competitors`, `search` counts, and `top_races`.
-  Competitors include submission IDs, names, original leaderboard rank/score,
-  controller paths/hashes, declared color, effective RGBA/hex color, and grid
-  position. Declared colors follow the car into the finale; cars without a
-  declared color use that stage's grid palette, matching the viewer.
-  `holdout` records the review source, strict cutoff, and every excluded submission
-  with its score. Juiced competitor records contain `review_total_score`; their
-  stages have `eligible_for_finale: false`. Regular categories record
-  `skipped_juiced` entries separately from category-priority exclusions.
-- Every top race includes `spec`, `interest`, `classification`, `podium`, and
-  `launch` with `cwd`, `argv`, and a shell-quoted command. Prefer executing
-  `argv` directly rather than passing the command through a shell.
-- **`show_runner`**: six regular segments plus any Juiced exhibitions before the
-  finale, each defaulting to its best race,
-  with alternate trial IDs and `introduce_competitors`, `launch_race`, and
-  `show_results` steps. Presenters can show the supplied names/colors before
-  launching. Submission emails and student IDs are not included.
-- **`plan.trials.jsonl`**: detailed trial records, including score components,
-  race settings, full results, overtake events, timings, and errors/timeouts.
+Without Juiced exhibitions this is **700 seed trials**, plus lap calibration.
+Each Juiced heat adds 100 seed trials. Procedural track seeds are 0–9 and starting
+seeds are 110–119 per layout; Clock It and Bahrain starts are 110–209.
+`--start-track-seed`, `--start-seed`, `--track-count`, `--starts-per-track`, and
+`--bahrain-seed-count` change these ranges. The last flag is the count **per
+Bahrain field**. Clock It always uses the game's default `mugello-short` layout,
+without a procedural track seed, and excludes Juiced holdouts. `--fixed-seed-count`
+sets the number of Clock It starting seeds and any fixed non-Bahrain exhibition
+trials; its default is `track-count * starts-per-track`. `--juiced-track` can
+explicitly choose a fixed exhibition track.
+
+Before the full search, each non-Bahrain field/layout runs pilots using its
+first starting seed. The planner measures the initial lap count, estimates a
+better count, and tests additional counts until the heat reaches **80–100
+seconds**. This is simulated time from race start until the heat ends, including
+the post-P1 finish deadline, excluding countdown and presentation screens.
+Different layouts can use different lap counts. Initial guesses are 6 laps for
+Sips Tea, Gs Going Crazy, Hits Different and Juiced, 8 for Gas Locked In, and 10
+for Clock It.
+
+`--target-seconds` and `--duration-tolerance-seconds` set the target and window.
+Calibration is bounded by `--calibration-attempts` (6 per field/layout) and
+`--max-calibration-laps` (30). If no tested lap count reaches the window, a warning
+records the closest measured count used instead. If no pilot has a finisher,
+calibration is marked unavailable and search uses the initial count. Different
+starting seeds can still change the eventual duration.
+
+`--no-calibrate-laps` skips pilots. Repeated `--laps CATEGORY=N` options fix a
+category's length and skip its calibration (for example, `--laps clock-it=9`).
+Category IDs are `sips-tea`, `gs-going-crazy`, `hits-different`, `gas-locked-in`,
+`clock-it`, and `juiced`. Both Bahrain fields stay at three laps.
+
+Ranking blends the existing action score with a duration score:
+
+```text
+duration_score = 100 * exp(-0.5 * ((heat_seconds - target_seconds) / tolerance_seconds)^2)
+score = (1 - duration_weight) * action_score + duration_weight * duration_score
+```
+
+All-DNF races get zero duration points. `--duration-weight` is a share from 0 to
+1, default 0.2. `--weights LEAD PASS FINISH` controls the relative action terms,
+so the example contributes 32% lead changes, 16% overtakes, 32% close finishes,
+and 20% duration. JSON retains all original action components and the duration
+breakdown. Bahrain uses this ranking while keeping its three-lap length.
+
+Workers run in fresh interpreters with a default 300-second wall-clock limit
+(`--timeout-seconds`). `--jobs` defaults to 4. Damage defaults off and marshals
+on, with a default stuck threshold of 1.0 second. Marshal/finish-deadline settings
+apply to pilots, seed search and replays.
+Playback flags (`--camera`, `--fullscreen`, `--no-music`, `--no-audio`, `--muted`)
+do not change simulation or scores.
+
+Add `--plan-only` to inspect fields and seed counts without calibration or race
+simulation. Resume an interrupted run with the same command plus `--resume`;
+`--retry-failed` also retries recorded errors/timeouts. Completed pilots are
+checkpointed, reused on resume, and count toward the full seed search when
+their lap count is selected. They are not simulated twice.
+
+Use a **new output path** for this plan format or after changing the export,
+controllers, engine, review CSV, thresholds, calibration or race settings.
+Playback-only flags may change on resume. The plan uses schema version 2:
+
+- `groups`, `juiced_groups`, and `bahrain_groups` record the fields and their
+  compositions. `lap_calibration` records chosen laps, pilot durations, statuses,
+  and trial IDs by layout. Each stage retains its top three races.
+- Each top race includes its actual lap count in `spec`, original `interest`,
+  combined `quality`, full `classification`, `podium`, and `launch` with `cwd`,
+  `argv`, and a shell-quoted command containing `--title`.
+- `show_runner` includes introductions, launches, results, and alternatives for
+  the regular groups, optional exhibitions, and both Bahrain fields.
+- `plan.trials.jsonl` stores pilot/search phases, exact settings, durations,
+  scores, events and errors. `plan.json` is checkpointed after each trial.
+
+Final console output lists each field's top three titled replay commands,
+with actual laps, seconds, scores and podiums. Print each field's best command:
+
+```bash
+jq -r '.show_runner[] | .steps[] | select(.type == "launch_race") | .shell_command' \
+  artifacts/race-night-all-spawns-bahrain/plan.json
+```
 
 ### Scoring races for interesting replays
 
@@ -990,10 +1052,12 @@ training loop.
 ## Reviewing submission conventions
 
 Scan an extracted submission directory and write every submission's ID, total
-review score, and exported race metrics to a CSV, sorted by review score highest first:
+review score, exported race metrics, and reported programming experience to a
+CSV, sorted by review score highest first:
 
 ```bash
 uv run python scripts/review_submissions.py assignment_8706145_export \
+  --experience-csv submission_metadata.csv \
   --csv artifacts/submission_review_scores.csv
 ```
 
@@ -1006,7 +1070,8 @@ imported helpers do not contribute to the score. Missing, invalid, or unreadable
 controllers remain in the CSV with a blank score, after scored submissions.
 
 The CSV columns are `submission_id`, `total_score`, `all_spawns_no_crumbs_laps`,
-and `clean_lap_seconds`. Race metrics come from each submission's current
+`clean_lap_seconds`, `experience_level`, `experience_rank`, and `experience_match`.
+Race metrics come from each submission's current
 leaderboard in `submission_metadata.yml`, read with the project's existing
 PyYAML dependency. `clean_lap_seconds` is the exported **Clock It (s)** metric:
 the average of each starting offset's fastest clean lap. Missing/ineligible
@@ -1014,6 +1079,23 @@ metrics remain blank; historical results are never substituted. Race metrics
 do not change the review score or sorting, and are included even if a controller
 could not be scanned. Exports without a metadata file still produce the CSV,
 with blank race metric columns.
+
+The experience columns use **Question 1.1 Response** in the survey CSV.
+`--experience-csv` selects a survey explicitly; otherwise the script automatically
+uses `submission_metadata.csv` beside the export directory if that file exists.
+Student IDs and normalized email addresses join survey responses to the current
+submitters listed in the export's `submission_metadata.yml`. Survey submission
+IDs belong to the survey assignment and are not used to join racing submissions.
+Ambiguous or conflicting identity matches remain unknown.
+
+For pairs, `experience_level` contains the highest known response, with
+`experience_rank` ordered as **0 = None**, **1 = A little experience**,
+**2 = Some experience**, **3 = Substantial experience**. The level column preserves
+the full response label. `experience_match` is `complete` when all submitters
+have a matched response, `partial` when only some do, and `unmatched` when none
+do. Blank or absent responses remain unknown, distinct from an actual **None**
+answer. Without a survey, all three experience columns are blank. Experience is
+descriptive context and does not contribute to the review score.
 
 The score sums each rule's weight times its occurrence count, capped per rule:
 

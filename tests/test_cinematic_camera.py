@@ -109,7 +109,7 @@ def test_cinematic_cli_option(command: list[str]) -> None:
 def test_v_cycles_cinematic_once_and_resets_director(include_split: bool) -> None:
     rig = CameraRig(view=CameraView.TOP_DOWN, selected_car_id="3")
     visited: list[CameraView] = []
-    for _ in range(7 if include_split else 6):
+    for _ in range(8 if include_split else 7):
         rig.cinematic.update((car(1, 100),), delta_seconds=0)
         update_camera_cycle(rig, cycle_key_down=True, include_split=include_split)
         visited.append(rig.view)

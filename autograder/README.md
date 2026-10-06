@@ -42,6 +42,9 @@ implicitly selected. Before loading the controller, the grader syncs its
 Development dependency groups and installation of the submitted project itself
 are skipped.
 
+Invalid submission feedback directs students to **EX99 - Formula110 Qualifying**
+on **Course AI > Resources > Exercises** for the submission instructions.
+
 ## Grading and leaderboard
 
 The selected controller runs for 30 simulated seconds on deterministic seeds
@@ -57,8 +60,19 @@ equal-length fifths of the lap:
 | 7656 | 65.27% | Borgo crest toward Casanova approach |
 | 9340 | 81.31% | Return Bend |
 
-The single 100-point check passes when every run finishes the full duration and
-records positive forward track progress.
+The single 100-point check passes when **All Spawns, No Crumbs >= 2.0**;
+otherwise it awards 0 points. This is the minimum qualification for the F110
+event. The metric is the lowest penalty-adjusted lap progress across all five
+starting offsets, so every run must reach at least 2.0 laps within 30 simulated
+seconds. Every run must finish the full duration without controller errors,
+elimination, or reaching 100% damage. Minor damage or wall contact is allowed.
+Qualification uses unrounded progress, not the rounded leaderboard display.
+The qualification result and explanation appear in both the overall feedback
+and the scored test.
+
+Leaderboard eligibility and metric calculations are unchanged. Eligible
+controllers below 2.0 still receive their leaderboard entries even though they
+earn 0 points and do not meet the event qualification minimum.
 
 Marshal recovery is enabled. A car that remains stuck for 2 seconds is reset
 onto the track with its damage preserved, a 5-meter scored-distance penalty,
